@@ -1,0 +1,124 @@
+# Microsoft Exchange Server 2016 / 2019 / Subscription Edition — services, databases,
+# certificates, SMTP. READ_ONLY only. Runs on the Exchange server over OpenSSH; the Exchange
+# snap-in is loaded first (Exchange Management Shell without remoting).
+category: exchange
+defaults:
+  os: [exchange-2016, exchange-2019, exchange-se]
+  shell: powershell
+  privilege: exchange-admin
+  timeout: 120
+  preamble: "Add-PSSnapin Microsoft.Exchange.Management.PowerShell.SnapIn -ErrorAction Stop"
+  tags: [exchange, mail]
+snippets:
+  - id: exchange.servers
+    risk: READ_ONLY
+    name: {en: "Exchange servers", bg: "Exchange сървъри"}
+    description: {en: "All Exchange servers with role, edition and build.", bg: "Всички Exchange сървъри с роля, издание и build."}
+    command: |-
+      Get-ExchangeServer | Select-Object Name,ServerRole,Edition,AdminDisplayVersion | Format-Table -AutoSize
+    expected: {en: "Name, ServerRole (Mailbox/Edge), Edition, AdminDisplayVersion (Version 15.2 (Build ...)).", bg: "Име, роля (Mailbox/Edge), издание и версия (Version 15.2 (Build ...))."}
+    errors: {en: "'No snap-ins have been registered' = not an Exchange server or the management tools are missing.", bg: "'No snap-ins have been registered' = не е Exchange сървър или липсват инструментите за управление."}
+
+  - id: exchange.service_health
+    risk: READ_ONLY
+    name: {en: "Required services", bg: "Задължителни услуги"}
+    description: {en: "Are all services required by the Exchange roles running.", bg: "Работят ли всички услуги, нужни за ролите на Exchange."}
+    command: |-
+      Test-ServiceHealth | Format-Table Role,RequiredServicesRunning,ServicesNotRunning -AutoSize
+    expected: {en: "RequiredServicesRunning True for every role; ServicesNotRunning empty.", bg: "RequiredServicesRunning True за всяка роля; ServicesNotRunning празно."}
+    errors: {en: "Listed services in ServicesNotRunning are the ones to check (do not restart from here).", bg: "Услугите в ServicesNotRunning са тези за проверка (не се рестартират оттук)."}
+
+  - id: exchange.component_state
+    risk: READ_ONLY
+    name: {en: "Server component state", bg: "Състояние на компонентите"}
+    description: {en: "Shows components that are Inactive (e.g. left in maintenance mode).", bg: "Показва неактивните компоненти (напр. останал режим на поддръжка)."}
+    command: |-
+      Get-ServerComponentState -Identity $env:COMPUTERNAME | Select-Object Component,State | Format-Table -AutoSize
+    expected: {en: "All components Active (ForwardSyncDaemon / ProvisioningRps may be Inactive by design).", bg: "Всички компоненти Active (ForwardSyncDaemon / ProvisioningRps може нарочно да са Inactive)."}
+    errors: {en: "ServerWideOffline or HubTransport Inactive = server still in maintenance mode.", bg: "ServerWideOffline или HubTransport Inactive = сървърът е още в режим на поддръжка."}
+
+  - id: exchange.database_status
+    risk: READ_ONLY
+    name: {en: "Mailbox databases", bg: "Пощенски бази данни"}
+    description: {en: "Mounted state, size and white space of every mailbox database.", bg: "Монтирана ли е, размер и свободно място във всяка пощенска база."}
+    command: |-
+      Get-MailboxDatabase -Status | Select-Object Name,Server,Mounted,DatabaseSize,AvailableNewMailboxSpace,LastFullBackup | Format-Table -AutoSize
+    expected: {en: "Mounted True, DatabaseSize, AvailableNewMailboxSpace and LastFullBackup.", bg: "Mounted True, размер, свободно място (AvailableNewMailboxSpace) и последен пълен backup."}
+    errors: {en: "Mounted False = database offline. Empty LastFullBackup = no Exchange-aware backup yet.", bg: "Mounted False = базата е спряна. Празен LastFullBackup = още няма backup, съобразен с Exchange."}
+
+  - id: exchange.database_copies
+    risk: READ_ONLY
+    name: {en: "DAG database copies", bg: "Копия на базите (DAG)"}
+    description: {en: "Copy status, queues and content index of DAG copies.", bg: "Състояние на копията, опашки и content index в DAG."}
+    tags: [dag]
+    command: |-
+      Get-MailboxDatabaseCopyStatus * | Select-Object Name,Status,CopyQueueLength,ReplayQueueLength,ContentIndexState | Format-Table -AutoSize
+    expected: {en: "Mounted / Healthy, queues near 0, ContentIndexState Healthy.", bg: "Mounted / Healthy, опашки около 0, ContentIndexState Healthy."}
+    errors: {en: "Without a DAG each database shows one Mounted copy only.", bg: "Без DAG всяка база има само едно Mounted копие."}
+
+  - id: exchange.certificates
+    risk: READ_ONLY
+    name: {en: "Exchange certificates", bg: "Сертификати на Exchange"}
+    description: {en: "Certificates with assigned services and expiry date.", bg: "Сертификати с назначени услуги и дата на изтичане."}
+    tags: [tls, security]
+    command: |-
+      Get-ExchangeCertificate | Select-Object Thumbprint,Services,NotAfter,Subject,@{n='DaysLeft';e={[int]($_.NotAfter - (Get-Date)).TotalDays}} | Sort-Object NotAfter | Format-List
+    expected: {en: "Thumbprint, Services (IIS, SMTP, IMAP, POP), NotAfter, Subject, DaysLeft.", bg: "Thumbprint, услуги (IIS, SMTP, IMAP, POP), NotAfter, Subject и оставащи дни (DaysLeft)."}
+    errors: {en: "An expired certificate bound to IIS/SMTP breaks OWA, Outlook and TLS mail.", bg: "Изтекъл сертификат за IIS/SMTP спира OWA, Outlook и TLS пощата."}
+
+  - id: exchange.queues
+    risk: READ_ONLY
+    name: {en: "Transport queues", bg: "Опашки за доставка"}
+    description: {en: "Queues with message count and status.", bg: "Опашки с брой съобщения и състояние."}
+    tags: [smtp, queue]
+    command: |-
+      Get-Queue | Select-Object Identity,DeliveryType,Status,MessageCount,NextHopDomain,LastError | Format-Table -AutoSize
+    expected: {en: "Low MessageCount and Status Active/Ready.", bg: "Малък MessageCount и Status Active/Ready."}
+    errors: {en: "Retry with LastError (e.g. 451 4.4.0) shows the delivery problem.", bg: "Retry с LastError (напр. 451 4.4.0) показва проблема с доставката."}
+
+  - id: exchange.receive_connectors
+    risk: READ_ONLY
+    name: {en: "Receive connectors", bg: "Receive конектори"}
+    description: {en: "Bindings, remote IP ranges and authentication of receive connectors.", bg: "Портове, разрешени IP и удостоверяване на receive конекторите."}
+    tags: [smtp]
+    command: |-
+      Get-ReceiveConnector | Select-Object Identity,Bindings,RemoteIPRanges,AuthMechanism,PermissionGroups,Enabled | Format-List
+    expected: {en: "Default Frontend on 0.0.0.0:25 with AnonymousUsers for internet mail.", bg: "Default Frontend на 0.0.0.0:25 с AnonymousUsers за поща от интернет."}
+    errors: {en: "An open relay is a connector with ExternalAuthoritative or Anonymous relay rights for 0.0.0.0-255.255.255.255.", bg: "Open relay е конектор с ExternalAuthoritative или анонимен relay за 0.0.0.0-255.255.255.255."}
+
+  - id: exchange.send_connectors
+    risk: READ_ONLY
+    name: {en: "Send connectors", bg: "Send конектори"}
+    description: {en: "Address spaces, smart hosts and TLS settings of send connectors.", bg: "Адресни пространства, smart host и TLS на send конекторите."}
+    tags: [smtp]
+    command: |-
+      Get-SendConnector | Select-Object Identity,AddressSpaces,SmartHosts,RequireTLS,TlsCertificateName,Enabled | Format-List
+    expected: {en: "AddressSpaces SMTP:*;1 for internet mail, SmartHosts if mail goes through a gateway (e.g. PMG).", bg: "AddressSpaces SMTP:*;1 за интернет поща, SmartHosts при изпращане през gateway (напр. PMG)."}
+    errors: {en: "Mail stuck in queues with a smart host = check the gateway (pmg.* snippets).", bg: "Поща, заседнала в опашките при smart host = провери gateway-я (pmg.* шаблоните)."}
+
+  - id: exchange.message_tracking
+    risk: READ_ONLY
+    name: {en: "Message tracking by sender", bg: "Проследяване на писма по подател"}
+    description: {en: "Tracking log events for one sender in the last hours.", bg: "Събития от проследяването за един подател през последните часове."}
+    tags: [smtp, troubleshooting]
+    params:
+      - name: sender
+        type: email
+        example: user@example.com
+        description: {en: "Sender e-mail address", bg: "Имейл на подателя"}
+      - name: hours
+        type: int
+        min: 1
+        max: 168
+        default: 4
+        description: {en: "Look back this many hours", bg: "Толкова часа назад"}
+      - name: count
+        type: int
+        min: 10
+        max: 1000
+        default: 100
+        description: {en: "Maximum events", bg: "Максимален брой събития"}
+    command: |-
+      Get-MessageTrackingLog -Start (Get-Date).AddHours(-{{hours}}) -Sender {{sender}} -ResultSize {{count}} | Select-Object Timestamp,EventId,Source,Recipients,MessageSubject | Format-Table -AutoSize
+    expected: {en: "Timestamp, EventId (RECEIVE, SEND, DELIVER, FAIL), Source, Recipients, MessageSubject.", bg: "Време, EventId (RECEIVE, SEND, DELIVER, FAIL), Source, получатели и тема."}
+    errors: {en: "Subjects can be personal data — share the output only with authorised staff.", bg: "Темите може да са лични данни — показвай изхода само на оправомощени хора."}

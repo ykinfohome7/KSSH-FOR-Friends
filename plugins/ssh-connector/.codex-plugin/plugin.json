@@ -1,0 +1,24 @@
+{
+  "name": "ssh-connector",
+  "version": "1.4.1",
+  "description": "Work directly over SSH on many Debian and Red Hat servers: commands, groups, snippets, interactive shells, SFTP, tunnels, jump hosts, failover, event watching, server profiles, SSH key rotation and Tailscale, sudo password, GitHub Codespaces lifecycle, read-only SNMP monitoring, read-only RDP / Windows checks and RDP tunnel, honest connector endpoint report (stdio / Tailscale Serve / Funnel) (60 commands, help in BG/EN).",
+  "author": {
+    "name": "ykinfohome7"
+  },
+  "homepage": "https://github.com/ykinfohome7/KSSH-FOR-Friends",
+  "repository": "https://github.com/ykinfohome7/KSSH-FOR-Friends",
+  "license": "GPL-3.0",
+  "keywords": [
+    "ssh",
+    "sftp",
+    "devops",
+    "servers",
+    "debian",
+    "redhat"
+  ],
+  "mcpServers": "./codex-mcp.json",
+  "interface": {
+    "displayName": "SSH Connector",
+    "category": "Developer Tools"
+  }
+}

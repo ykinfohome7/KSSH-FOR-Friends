@@ -1,0 +1,8 @@
+servers.yaml
+.venv/
+__pycache__/
+*.pyc
+.env
+# Never commit generated integration-test logs (may contain temporary tokens).
+test-results.txt
+*.test-results.log

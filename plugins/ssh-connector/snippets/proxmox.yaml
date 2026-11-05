@@ -1,0 +1,178 @@
+# Proxmox VE — hosts, VM, LXC, storage, backup, networking. READ_ONLY only.
+# Most pve* commands need root on the node (or a user in the right Proxmox groups via pvesh).
+category: proxmox
+defaults:
+  os: [proxmox-ve]
+  shell: posix
+  privilege: root
+  timeout: 45
+  tags: [proxmox]
+snippets:
+  - id: proxmox.version
+    risk: READ_ONLY
+    name: {en: "Proxmox VE version", bg: "Версия на Proxmox VE"}
+    description: {en: "Versions of Proxmox VE, the kernel and all core packages.", bg: "Версии на Proxmox VE, ядрото и основните пакети."}
+    command: |-
+      pveversion -v
+    expected: {en: "proxmox-ve: X.Y (running kernel ...) and one line per package.", bg: "proxmox-ve: X.Y (running kernel ...) и по един ред за пакет."}
+    errors: {en: "'command not found' means this is not a Proxmox VE node.", bg: "'command not found' означава, че това не е Proxmox VE хост."}
+
+  - id: proxmox.cluster_status
+    risk: READ_ONLY
+    name: {en: "Cluster and quorum", bg: "Клъстер и кворум"}
+    description: {en: "Cluster membership, quorum and votes.", bg: "Членове на клъстера, кворум и гласове."}
+    tags: [cluster]
+    command: |-
+      pvecm status 2>/dev/null || echo "not part of a cluster"
+    expected: {en: "Quorate: Yes and the member list; or 'not part of a cluster'.", bg: "Quorate: Yes и списък с членове; или 'not part of a cluster'."}
+    errors: {en: "Quorate: No — the cluster is read-only for configuration until quorum returns.", bg: "Quorate: No — конфигурацията е само за четене, докато кворумът се върне."}
+
+  - id: proxmox.node_resources
+    risk: READ_ONLY
+    name: {en: "Node resources", bg: "Ресурси на хостовете"}
+    description: {en: "CPU, memory, disk and uptime of every node in the cluster.", bg: "CPU, памет, диск и време на работа за всеки хост в клъстера."}
+    command: |-
+      pvesh get /cluster/resources --type node --output-format json-pretty
+    expected: {en: "JSON list with node, status, cpu, maxcpu, mem, maxmem, disk, uptime.", bg: "JSON списък с node, status, cpu, maxcpu, mem, maxmem, disk, uptime."}
+    errors: {en: "status 'offline' for a node that does not answer.", bg: "status 'offline' за хост, който не отговаря."}
+
+  - id: proxmox.vm_list
+    risk: READ_ONLY
+    name: {en: "Virtual machines", bg: "Виртуални машини"}
+    description: {en: "QEMU VMs on this node with status, memory and boot disk size.", bg: "QEMU виртуални машини на този хост със състояние, памет и размер на диска."}
+    tags: [vm]
+    command: |-
+      qm list
+    expected: {en: "VMID, NAME, STATUS, MEM(MB), BOOTDISK(GB), PID.", bg: "Колони VMID, NAME, STATUS, MEM(MB), BOOTDISK(GB), PID."}
+    errors: {en: "Only VMs of the local node are listed; use proxmox.cluster_guests for all nodes.", bg: "Показват се само машините на този хост; за всички хостове — proxmox.cluster_guests."}
+
+  - id: proxmox.lxc_list
+    risk: READ_ONLY
+    name: {en: "LXC containers", bg: "LXC контейнери"}
+    description: {en: "Containers on this node with status and name.", bg: "Контейнери на този хост със състояние и име."}
+    tags: [lxc]
+    command: |-
+      pct list
+    expected: {en: "VMID, Status, Lock, Name.", bg: "Колони VMID, Status, Lock, Name."}
+    errors: {en: "A value in Lock (backup, migrate, snapshot) means an operation is running.", bg: "Стойност в Lock (backup, migrate, snapshot) означава, че тече операция."}
+
+  - id: proxmox.cluster_guests
+    risk: READ_ONLY
+    name: {en: "All guests in the cluster", bg: "Всички машини в клъстера"}
+    description: {en: "VMs and containers of all nodes with node, status and resources.", bg: "Виртуални машини и контейнери от всички хостове с хост, състояние и ресурси."}
+    tags: [vm, lxc, cluster]
+    command: |-
+      pvesh get /cluster/resources --type vm --output-format json-pretty
+    expected: {en: "JSON list with vmid, name, node, type (qemu/lxc), status, cpu, mem, maxmem.", bg: "JSON списък с vmid, name, node, type (qemu/lxc), status, cpu, mem, maxmem."}
+    errors: {en: "Guests on offline nodes show status 'unknown'.", bg: "Машините на недостъпни хостове са със status 'unknown'."}
+
+  - id: proxmox.vm_config
+    risk: READ_ONLY
+    name: {en: "VM configuration", bg: "Конфигурация на VM"}
+    description: {en: "Hardware and options of one VM (disks, network, CPU, memory).", bg: "Хардуер и настройки на една VM (дискове, мрежа, CPU, памет)."}
+    tags: [vm]
+    params:
+      - name: vmid
+        type: int
+        min: 100
+        max: 999999999
+        example: 100
+        description: {en: "VM ID", bg: "Номер на VM"}
+    command: |-
+      qm config {{vmid}}
+    expected: {en: "key: value lines (cores, memory, net0, scsi0, boot ...). Cloud-init passwords are masked by Proxmox.", bg: "Редове ключ: стойност (cores, memory, net0, scsi0, boot ...). Паролите за cloud-init са скрити от Proxmox."}
+    errors: {en: "'Configuration file ... does not exist' — wrong VMID or VM on another node.", bg: "'Configuration file ... does not exist' — грешен VMID или VM на друг хост."}
+
+  - id: proxmox.lxc_config
+    risk: READ_ONLY
+    name: {en: "Container configuration", bg: "Конфигурация на контейнер"}
+    description: {en: "Resources, mount points and network of one LXC container.", bg: "Ресурси, точки на монтиране и мрежа на един LXC контейнер."}
+    tags: [lxc]
+    params:
+      - name: vmid
+        type: int
+        min: 100
+        max: 999999999
+        example: 101
+        description: {en: "Container ID", bg: "Номер на контейнера"}
+    command: |-
+      pct config {{vmid}}
+    expected: {en: "arch, cores, memory, rootfs, net0, mp0 ... lines.", bg: "Редове arch, cores, memory, rootfs, net0, mp0 ..."}
+    errors: {en: "'Configuration file ... does not exist' — wrong ID or container on another node.", bg: "'Configuration file ... does not exist' — грешен номер или контейнер на друг хост."}
+
+  - id: proxmox.storage_status
+    risk: READ_ONLY
+    name: {en: "Storage status", bg: "Състояние на storage"}
+    description: {en: "All storages with type, state and usage.", bg: "Всички хранилища с тип, състояние и заетост."}
+    tags: [storage]
+    command: |-
+      pvesm status
+    expected: {en: "Name, Type, Status (active/inactive), Total, Used, Available, %.", bg: "Колони Name, Type, Status (active/inactive), Total, Used, Available, %."}
+    errors: {en: "Status 'inactive' for NFS/CIFS/PBS usually means the server is unreachable.", bg: "Status 'inactive' за NFS/CIFS/PBS обикновено означава, че сървърът е недостъпен."}
+
+  - id: proxmox.zfs_health
+    risk: READ_ONLY
+    name: {en: "ZFS pool health", bg: "Състояние на ZFS"}
+    description: {en: "Unhealthy pools only, then size and usage of all pools.", bg: "Само проблемните пулове, после размер и заетост на всички пулове."}
+    tags: [storage, zfs]
+    command: |-
+      zpool status -x; zpool list
+    expected: {en: "'all pools are healthy' and a table NAME SIZE ALLOC FREE ... HEALTH.", bg: "'all pools are healthy' и таблица NAME SIZE ALLOC FREE ... HEALTH."}
+    errors: {en: "'no pools available' when ZFS is not used. DEGRADED/FAULTED needs attention.", bg: "'no pools available', ако не се ползва ZFS. DEGRADED/FAULTED изисква внимание."}
+
+  - id: proxmox.ceph_status
+    risk: READ_ONLY
+    name: {en: "Ceph status", bg: "Състояние на Ceph"}
+    description: {en: "Ceph cluster health, monitors, OSDs and placement groups.", bg: "Състояние на Ceph: монитори, OSD и placement groups."}
+    tags: [storage, ceph]
+    command: |-
+      ceph -s 2>/dev/null || echo "Ceph is not configured on this node"
+    expected: {en: "health: HEALTH_OK, mon/mgr/osd counts and pgs active+clean.", bg: "health: HEALTH_OK, брой mon/mgr/osd и pgs active+clean."}
+    errors: {en: "HEALTH_WARN/HEALTH_ERR: run 'ceph health detail' (also read-only) for the reason.", bg: "HEALTH_WARN/HEALTH_ERR: 'ceph health detail' (също само четене) показва причината."}
+
+  - id: proxmox.backup_jobs
+    risk: READ_ONLY
+    name: {en: "Scheduled backup jobs", bg: "Планирани backup задачи"}
+    description: {en: "Cluster-wide vzdump jobs with schedule, storage and selection.", bg: "vzdump задачите в клъстера с график, хранилище и избрани машини."}
+    tags: [backup]
+    command: |-
+      pvesh get /cluster/backup --output-format json-pretty
+    expected: {en: "JSON list with id, schedule, storage, vmid/all, mode, enabled.", bg: "JSON списък с id, schedule, storage, vmid/all, mode, enabled."}
+    errors: {en: "Empty list [] means no scheduled backups.", bg: "Празен списък [] означава, че няма планирани backup-и."}
+
+  - id: proxmox.recent_tasks
+    risk: READ_ONLY
+    name: {en: "Recent tasks on this node", bg: "Последни задачи на хоста"}
+    description: {en: "Latest tasks (backup, migration, start/stop) with their result.", bg: "Последните задачи (backup, миграция, старт/стоп) с резултата им."}
+    tags: [tasks]
+    params:
+      - name: count
+        type: int
+        min: 5
+        max: 200
+        default: 30
+        description: {en: "Number of tasks", bg: "Брой задачи"}
+    command: |-
+      pvesh get /nodes/"$(hostname -s)"/tasks --limit {{count}} --output-format json-pretty
+    expected: {en: "JSON with type, id, user, starttime, endtime and status (OK or the error).", bg: "JSON с type, id, user, starttime, endtime и status (OK или грешката)."}
+    errors: {en: "'hostname lookup failed' if the node name differs from the short host name.", bg: "'hostname lookup failed', ако името на хоста в Proxmox е различно от краткото име."}
+
+  - id: proxmox.network_config
+    risk: READ_ONLY
+    name: {en: "Network configuration", bg: "Мрежова конфигурация"}
+    description: {en: "Bridges, bonds and VLANs from /etc/network/interfaces and their live state.", bg: "Мостове, bond и VLAN от /etc/network/interfaces и текущото им състояние."}
+    tags: [network, vlan]
+    command: |-
+      cat /etc/network/interfaces; ip -br link show type bridge; ip -br link show type bond
+    expected: {en: "auto/iface stanzas (vmbr0, bond0, VLAN tags) and UP/DOWN state of bridges and bonds.", bg: "Секции auto/iface (vmbr0, bond0, VLAN) и UP/DOWN за мостовете и bond-овете."}
+    errors: {en: "Pending changes from the GUI are in interfaces.new and are not active yet.", bg: "Неприложени промени от GUI са в interfaces.new и още не са активни."}
+
+  - id: proxmox.firewall_status
+    risk: READ_ONLY
+    name: {en: "Proxmox firewall status", bg: "Състояние на Proxmox firewall"}
+    description: {en: "Whether the Proxmox firewall service is enabled and running.", bg: "Дали Proxmox firewall е включен и работи."}
+    tags: [security, firewall]
+    command: |-
+      pve-firewall status
+    expected: {en: "'Status: enabled/running' or 'disabled/running'.", bg: "'Status: enabled/running' или 'disabled/running'."}
+    errors: {en: "This only reads the state; rules are managed in the GUI.", bg: "Само чете състоянието; правилата се управляват от GUI."}

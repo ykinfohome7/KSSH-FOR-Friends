@@ -1,0 +1,158 @@
+# Backup & Recovery — checks of archives and data integrity. READ_ONLY only.
+# Nothing here starts, deletes or restores a backup.
+category: backup
+defaults:
+  os: [debian, ubuntu, rhel, rocky, proxmox-ve, proxmox-backup-server]
+  shell: posix
+  privilege: user
+  timeout: 120
+  tags: [backup]
+snippets:
+  - id: backup.pve_backup_tasks
+    risk: READ_ONLY
+    name: {en: "Proxmox backup task results", bg: "Резултати от backup задачите в Proxmox"}
+    description: {en: "Latest vzdump tasks on this node with their status.", bg: "Последните vzdump задачи на хоста със статуса им."}
+    os: [proxmox-ve]
+    privilege: root
+    tags: [proxmox]
+    params:
+      - name: count
+        type: int
+        min: 5
+        max: 200
+        default: 20
+        description: {en: "Number of tasks", bg: "Брой задачи"}
+    command: |-
+      pvesh get /nodes/"$(hostname -s)"/tasks --typefilter vzdump --limit {{count}} --output-format json-pretty
+    expected: {en: "JSON with starttime, endtime, id (VMID) and status 'OK' for every backup.", bg: "JSON със starttime, endtime, id (VMID) и status 'OK' за всеки backup."}
+    errors: {en: "A status other than OK (e.g. 'job errors') = check that task log in the GUI.", bg: "Статус, различен от OK (напр. 'job errors') = провери лога на задачата в GUI."}
+
+  - id: backup.pve_local_dumps
+    risk: READ_ONLY
+    name: {en: "Local vzdump files", bg: "Локални vzdump файлове"}
+    description: {en: "Newest backup files on the default local dump directory.", bg: "Най-новите backup файлове в стандартната локална папка."}
+    os: [proxmox-ve]
+    privilege: root
+    tags: [proxmox]
+    params:
+      - name: count
+        type: int
+        min: 5
+        max: 200
+        default: 20
+        description: {en: "Number of files", bg: "Брой файлове"}
+    command: |-
+      ls -lht /var/lib/vz/dump 2>/dev/null | head -n {{count}}
+    expected: {en: "vzdump-qemu-<vmid>-<date>.vma.zst / .log files with size and date.", bg: "Файлове vzdump-qemu-<vmid>-<дата>.vma.zst / .log с размер и дата."}
+    errors: {en: "Empty = backups go to another storage (NFS, PBS); see proxmox.storage_status.", bg: "Празно = backup-ите отиват в друго хранилище (NFS, PBS); виж proxmox.storage_status."}
+
+  - id: backup.pbs_datastores
+    risk: READ_ONLY
+    name: {en: "Proxmox Backup Server datastores", bg: "Хранилища в Proxmox Backup Server"}
+    description: {en: "Datastores with path and usage on a PBS host.", bg: "Хранилищата с път и заетост на PBS сървър."}
+    os: [proxmox-backup-server]
+    privilege: root
+    tags: [pbs]
+    command: |-
+      proxmox-backup-manager datastore list; df -h -x tmpfs -x devtmpfs
+    expected: {en: "Datastore name, path and comment, then disk usage of the file systems.", bg: "Име, път и коментар на хранилищата, после заетост на дисковете."}
+    errors: {en: "'command not found' = not a PBS host.", bg: "'command not found' = това не е PBS."}
+
+  - id: backup.checksum
+    risk: READ_ONLY
+    name: {en: "SHA-256 of a file", bg: "SHA-256 на файл"}
+    description: {en: "Checksum of one file, to compare a copy with its source.", bg: "Контролна сума на един файл, за сравнение на копие с оригинала."}
+    tags: [integrity]
+    params:
+      - name: path
+        type: path
+        example: /root/kssh-backup-latest/opt-ssh-connector.tgz
+        description: {en: "Absolute path to the file", bg: "Пълен път до файла"}
+    command: |-
+      sha256sum -- {{path}}
+    expected: {en: "<64 hex characters>  <path>.", bg: "<64 шестнадесетични знака>  <път>."}
+    errors: {en: "Large files take time; the timeout is 120 s.", bg: "Големите файлове отнемат време; лимитът е 120 s."}
+
+  - id: backup.verify_checksums
+    risk: READ_ONLY
+    name: {en: "Verify a SHA256SUMS file", bg: "Проверка на SHA256SUMS файл"}
+    description: {en: "Checks every file listed in SHA256SUMS inside a backup directory.", bg: "Проверява всеки файл от SHA256SUMS в папка с backup."}
+    tags: [integrity]
+    params:
+      - name: dir
+        type: path
+        example: /root/kssh-backup-latest
+        description: {en: "Directory that contains SHA256SUMS", bg: "Папка, в която е SHA256SUMS"}
+    command: |-
+      cd -- {{dir}} && sha256sum -c SHA256SUMS
+    expected: {en: "'<file>: OK' for every entry.", bg: "'<файл>: OK' за всеки ред."}
+    errors: {en: "'FAILED' = the file changed or is damaged; 'No such file' = SHA256SUMS missing.", bg: "'FAILED' = файлът е променен или повреден; 'No such file' = липсва SHA256SUMS."}
+
+  - id: backup.archive_test
+    risk: READ_ONLY
+    name: {en: "Test a tar.gz archive", bg: "Проверка на tar.gz архив"}
+    description: {en: "Reads the whole archive without extracting it.", bg: "Прочита целия архив, без да го разархивира."}
+    tags: [integrity]
+    params:
+      - name: path
+        type: path
+        example: /root/kssh-backup-latest/etc-ssh-connector.tgz
+        description: {en: "Absolute path to a .tar.gz / .tgz", bg: "Пълен път до .tar.gz / .tgz"}
+    command: |-
+      tar -tzf {{path}} >/dev/null && echo "archive OK"
+    expected: {en: "'archive OK'.", bg: "'archive OK' (архивът е цял)."}
+    errors: {en: "'unexpected end of file' or 'invalid compressed data' = damaged archive.", bg: "'unexpected end of file' или 'invalid compressed data' = повреден архив."}
+
+  - id: backup.zfs_scrub_status
+    risk: READ_ONLY
+    name: {en: "ZFS scrub results", bg: "Резултати от ZFS scrub"}
+    description: {en: "Last scrub date, repaired bytes and errors per pool.", bg: "Дата на последния scrub, поправени байтове и грешки по пулове."}
+    os: [proxmox-ve, proxmox-backup-server, debian, ubuntu]
+    privilege: root
+    tags: [zfs]
+    command: |-
+      zpool status | grep -E 'pool:|state:|scan:|errors:'
+    expected: {en: "'scan: scrub repaired 0B ... with 0 errors' and 'errors: No known data errors'.", bg: "'scan: scrub repaired 0B ... with 0 errors' и 'errors: No known data errors'."}
+    errors: {en: "No scrub in the last month = schedule one (a CHANGE, needs approval).", bg: "Без scrub през последния месец = планирай (това е CHANGE, иска одобрение)."}
+
+  - id: backup.disk_health
+    risk: READ_ONLY
+    name: {en: "Disk SMART health", bg: "SMART състояние на диск"}
+    description: {en: "Overall SMART health and key attributes of one disk.", bg: "Общо SMART състояние и основни атрибути на един диск."}
+    privilege: root
+    tags: [disk, integrity]
+    params:
+      - name: device
+        type: device
+        example: /dev/sda
+        description: {en: "Disk device", bg: "Дисково устройство"}
+    command: |-
+      smartctl -H -A {{device}}
+    expected: {en: "'SMART overall-health self-assessment test result: PASSED' and attributes (Reallocated, Pending, CRC).", bg: "'SMART overall-health self-assessment test result: PASSED' и атрибути (Reallocated, Pending, CRC)."}
+    errors: {en: "Virtual disks have no SMART; behind RAID controllers use -d megaraid,N (not covered here).", bg: "Виртуалните дискове нямат SMART; зад RAID контролер трябва -d megaraid,N (не е включено)."}
+
+  - id: backup.windows_backup_versions
+    risk: READ_ONLY
+    name: {en: "Windows Server Backup versions", bg: "Версии в Windows Server Backup"}
+    description: {en: "Backups known to Windows Server Backup with time and target.", bg: "Backup-ите в Windows Server Backup с време и цел."}
+    os: [windows-server-2019, windows-server-2022, windows-server-2025]
+    shell: powershell
+    privilege: admin
+    tags: [windows]
+    command: |-
+      wbadmin get versions
+    expected: {en: "'Backup time', 'Backup target', 'Version identifier' and 'Can recover' per backup.", bg: "'Backup time', 'Backup target', 'Version identifier' и 'Can recover' за всеки backup."}
+    errors: {en: "'There are no backups' or the feature is not installed.", bg: "'There are no backups' или функцията не е инсталирана."}
+
+  - id: backup.windows_shadow_copies
+    risk: READ_ONLY
+    name: {en: "Volume shadow copies", bg: "Shadow копия (VSS)"}
+    description: {en: "Existing VSS shadow copies and their creation time.", bg: "Съществуващите VSS копия и времето им на създаване."}
+    os: [windows-server-2019, windows-server-2022, windows-server-2025]
+    shell: powershell
+    privilege: admin
+    tags: [windows, vss]
+    command: |-
+      vssadmin list shadows
+    expected: {en: "Shadow copy sets with creation time and original volume.", bg: "Набори от shadow копия с време на създаване и оригинален том."}
+    errors: {en: "'No items found that satisfy the query' = no shadow copies.", bg: "'No items found that satisfy the query' = няма shadow копия."}

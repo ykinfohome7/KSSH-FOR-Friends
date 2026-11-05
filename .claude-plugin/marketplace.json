@@ -1,0 +1,12 @@
+{
+  "name": "kssh-for-friends",
+  "description": "SSH connector for Claude Code",
+  "owner": { "name": "ykinfohome7" },
+  "plugins": [
+    {
+      "name": "ssh-connector",
+      "source": "./plugins/ssh-connector",
+      "description": "SSH to many servers: commands, shells, SFTP, tunnels, failover, events; read-only SNMP and RDP/Windows monitoring"
+    }
+  ]
+}

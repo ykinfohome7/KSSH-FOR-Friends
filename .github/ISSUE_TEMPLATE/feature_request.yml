@@ -1,0 +1,28 @@
+name: "💡 Искам / Feature request"
+description: "Предложи нова функция или подобрение / Suggest a new feature or improvement"
+title: "[Искам] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: want
+    attributes:
+      label: "Какво искаш? / What do you want?"
+      description: "Опиши с прости думи / Describe it in plain words"
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: "Защо ти трябва? / Why do you need it?"
+  - type: textarea
+    id: example
+    attributes:
+      label: "Пример / Example"
+      description: "Как би изглеждала командата / How the command could look"
+      render: json
+  - type: dropdown
+    id: client
+    attributes:
+      label: "Къде го ползваш? / Where do you use it?"
+      multiple: true
+      options: ["Claude Code", "Claude app", "ChatGPT", "Codex", "Other / Друго"]

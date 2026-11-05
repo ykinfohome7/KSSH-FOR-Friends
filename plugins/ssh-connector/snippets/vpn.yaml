@@ -1,0 +1,103 @@
+# Tailscale and WireGuard — connections, status, diagnostics. READ_ONLY only.
+# No snippet changes a tunnel, a key or the Tailscale configuration; private keys are never shown.
+category: vpn
+defaults:
+  os: [debian, ubuntu, rhel, rocky, proxmox-ve, proxmox-mail-gateway]
+  shell: posix
+  privilege: user
+  timeout: 30
+  tags: [vpn]
+snippets:
+  - id: vpn.tailscale_status
+    risk: READ_ONLY
+    name: {en: "Tailscale status", bg: "Състояние на Tailscale"}
+    description: {en: "This device and the peers it sees, with direct/relay state.", bg: "Това устройство и видимите peer-и, с директна връзка или през relay."}
+    tags: [tailscale]
+    command: |-
+      tailscale status
+    expected: {en: "IP, name, user, OS and 'active; direct <ip:port>' or 'relay \"fra\"' per peer.", bg: "IP, име, потребител, ОС и 'active; direct <ip:port>' или 'relay \"fra\"' за всеки peer."}
+    errors: {en: "'Logged out' / 'NeedsLogin' = node is not authenticated (fix it in the Tailscale admin, not here).", bg: "'Logged out' / 'NeedsLogin' = възелът не е влязъл (оправя се в Tailscale админ панела, не оттук)."}
+
+  - id: vpn.tailscale_netcheck
+    risk: READ_ONLY
+    name: {en: "Tailscale network check", bg: "Мрежова проверка на Tailscale"}
+    description: {en: "UDP, NAT type and latency to DERP relays.", bg: "UDP, вид NAT и закъснение до DERP relay сървърите."}
+    tags: [tailscale, troubleshooting]
+    command: |-
+      tailscale netcheck
+    expected: {en: "UDP: true, MappingVariesByDestIP, Nearest DERP and per-region latency.", bg: "UDP: true, MappingVariesByDestIP, най-близък DERP и закъснение по региони."}
+    errors: {en: "UDP: false = only relayed connections (slower).", bg: "UDP: false = само връзки през relay (по-бавно)."}
+
+  - id: vpn.tailscale_ping
+    risk: READ_ONLY
+    name: {en: "Tailscale ping", bg: "Ping през Tailscale"}
+    description: {en: "Ping a peer through Tailscale and show whether the path is direct or via DERP.", bg: "Ping до peer през Tailscale и дали пътят е директен или през DERP."}
+    tags: [tailscale, troubleshooting]
+    params:
+      - name: peer
+        type: host
+        example: kssh
+        description: {en: "Peer name or Tailscale IP", bg: "Име на peer или Tailscale IP"}
+      - name: count
+        type: int
+        min: 1
+        max: 20
+        default: 5
+        description: {en: "Number of pings", bg: "Брой опити"}
+    command: |-
+      tailscale ping -c {{count}} {{peer}}
+    expected: {en: "'pong from <peer> (<ip>) via <ip:port> in Nms' (direct) or 'via DERP(fra)'.", bg: "'pong from <peer> (<ip>) via <ip:port> in Nms' (директно) или 'via DERP(fra)' (отговор от peer)."}
+    errors: {en: "'no reply' = peer offline or blocked by ACLs.", bg: "'no reply' = peer-ът е офлайн или е спрян от ACL."}
+
+  - id: vpn.tailscale_serve
+    risk: READ_ONLY
+    name: {en: "Tailscale Serve / Funnel", bg: "Публикуване през Tailscale Serve / Funnel"}
+    description: {en: "What this node publishes with Serve (tailnet) or Funnel (internet).", bg: "Какво публикува този възел със Serve (в tailnet) или Funnel (в интернет)."}
+    tags: [tailscale, security]
+    command: |-
+      tailscale serve status; tailscale funnel status
+    expected: {en: "https://<name>.ts.net (Funnel on/tailnet only) -> proxy http://127.0.0.1:<port>.", bg: "https://<име>.ts.net (Funnel on/само tailnet) -> proxy http://127.0.0.1:<порт>."}
+    errors: {en: "The output can reveal internal service addresses; share it carefully.", bg: "Изходът може да покаже вътрешни адреси на услуги; споделяй внимателно."}
+
+  - id: vpn.tailscale_ips
+    risk: READ_ONLY
+    name: {en: "Tailscale addresses and version", bg: "Tailscale адреси и версия"}
+    description: {en: "IPv4/IPv6 Tailscale addresses of this node and the client version.", bg: "IPv4/IPv6 Tailscale адреси на възела и версия на клиента."}
+    tags: [tailscale]
+    command: |-
+      tailscale ip; tailscale version
+    expected: {en: "100.x.y.z, fd7a:... and the version lines.", bg: "100.x.y.z, fd7a:... и редове с версията."}
+    errors: {en: "'failed to connect to local tailscaled' = the daemon is not running.", bg: "'failed to connect to local tailscaled' = услугата tailscaled не работи."}
+
+  - id: vpn.wireguard_status
+    risk: READ_ONLY
+    name: {en: "WireGuard status", bg: "Състояние на WireGuard"}
+    description: {en: "Interfaces, peers, endpoints, allowed IPs and handshakes. Private keys stay hidden.", bg: "Интерфейси, peer-и, endpoint, allowed IPs и handshake. Частните ключове остават скрити."}
+    privilege: root
+    tags: [wireguard]
+    command: |-
+      wg show
+    expected: {en: "interface, public key, 'private key: (hidden)', listening port and per peer endpoint, latest handshake, transfer.", bg: "interface, public key, 'private key: (hidden)', порт и за всеки peer endpoint, последен handshake, трафик."}
+    errors: {en: "Handshake older than ~3 minutes with traffic = tunnel is down. 'Operation not permitted' = needs root.", bg: "Handshake по-стар от ~3 минути при трафик = тунелът е паднал. 'Operation not permitted' = нужен е root."}
+
+  - id: vpn.wireguard_handshakes
+    risk: READ_ONLY
+    name: {en: "WireGuard handshake ages", bg: "Възраст на WireGuard handshake"}
+    description: {en: "Seconds since the last handshake of each peer.", bg: "Секунди от последния handshake на всеки peer."}
+    privilege: root
+    tags: [wireguard, monitoring]
+    command: |-
+      now=$(date +%s); wg show all latest-handshakes | while read -r ifc peer ts; do if [ "$ts" -eq 0 ]; then age=never; else age=$((now - ts))s; fi; echo "$ifc $peer $age"; done
+    expected: {en: "interface, peer public key and age (e.g. 45s) or 'never'.", bg: "интерфейс, публичен ключ на peer и възраст (напр. 45s) или 'never'."}
+    errors: {en: "'never' = the peer has not connected since the interface came up.", bg: "'never' = peer-ът не се е свързвал, откакто интерфейсът е вдигнат."}
+
+  - id: vpn.wireguard_transfer
+    risk: READ_ONLY
+    name: {en: "WireGuard traffic", bg: "WireGuard трафик"}
+    description: {en: "Received and sent bytes per peer.", bg: "Получени и изпратени байтове за всеки peer."}
+    privilege: root
+    tags: [wireguard, monitoring]
+    command: |-
+      wg show all transfer
+    expected: {en: "interface, peer, rx bytes, tx bytes.", bg: "интерфейс, peer, получени и изпратени байтове."}
+    errors: {en: "tx growing while rx stays 0 = the other side does not answer.", bg: "Растящ tx при rx 0 = другата страна не отговаря."}

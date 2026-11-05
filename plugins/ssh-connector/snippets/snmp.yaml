@@ -1,0 +1,97 @@
+# SNMP with the net-snmp command line tools from a Linux host. READ_ONLY only — no snmpset.
+# Credentials are NEVER passed on the command line (they would be visible in ps and history).
+# Put SNMPv3 settings for the monitoring user into ~/.snmp/snmp.conf on the host, for example:
+#   defVersion 3 / defSecurityName monitor / defSecurityLevel authPriv /
+#   defAuthType SHA-256 / defPrivType AES / defAuthPassphrase ... / defPrivPassphrase ...
+# (mode 0600, created by the administrator, not stored in GitHub). Prefer the MCP snmp_* tools of
+# KSSH 1.4.1 for allowlisted devices; these snippets are for ad-hoc checks from a server.
+category: snmp
+defaults:
+  os: [debian, ubuntu, rhel, rocky, proxmox-ve]
+  shell: posix
+  privilege: user
+  timeout: 45
+  tags: [snmp, monitoring]
+snippets:
+  - id: snmp.system
+    risk: READ_ONLY
+    name: {en: "Device system info", bg: "Системна информация за устройство"}
+    description: {en: "sysDescr, sysName, sysUpTime, sysContact and sysLocation.", bg: "sysDescr, sysName, sysUpTime, sysContact и sysLocation."}
+    params:
+      - name: host
+        type: host
+        example: 192.0.2.10
+        description: {en: "Device address", bg: "Адрес на устройството"}
+    command: |-
+      snmpget {{host}} SNMPv2-MIB::sysDescr.0 SNMPv2-MIB::sysName.0 SNMPv2-MIB::sysUpTime.0 SNMPv2-MIB::sysContact.0 SNMPv2-MIB::sysLocation.0
+    expected: {en: "Five 'SNMPv2-MIB::... = STRING/Timeticks' lines.", bg: "Пет реда 'SNMPv2-MIB::... = STRING/Timeticks'."}
+    errors: {en: "'Timeout: No Response' = wrong credentials, ACL or host; 'Unknown user name' = SNMPv3 user missing.", bg: "'Timeout: No Response' = грешни данни, ACL или адрес; 'Unknown user name' = няма такъв SNMPv3 потребител."}
+
+  - id: snmp.interfaces
+    risk: READ_ONLY
+    name: {en: "Interface names and state", bg: "Имена и състояние на интерфейсите"}
+    description: {en: "ifName, ifAlias, ifOperStatus and ifHighSpeed of all ports.", bg: "ifName, ifAlias, ifOperStatus и ifHighSpeed на всички портове."}
+    params:
+      - name: host
+        type: host
+        example: 192.0.2.10
+        description: {en: "Device address", bg: "Адрес на устройството"}
+    command: |-
+      snmpbulkwalk -Cr25 {{host}} IF-MIB::ifName; snmpbulkwalk -Cr25 {{host}} IF-MIB::ifAlias; snmpbulkwalk -Cr25 {{host}} IF-MIB::ifOperStatus; snmpbulkwalk -Cr25 {{host}} IF-MIB::ifHighSpeed
+    expected: {en: "Per index: name, description, up(1)/down(2) and speed in Mbit/s (10000 = 10G).", bg: "За всеки индекс: име, описание, up(1)/down(2) и скорост в Mbit/s (10000 = 10G)."}
+    errors: {en: "Missing IF-MIB names = MIB files not installed (use numeric OIDs or install snmp-mibs-downloader).", bg: "Липсващи имена от IF-MIB = няма MIB файлове (ползвай числови OID или snmp-mibs-downloader)."}
+
+  - id: snmp.interface_counters
+    risk: READ_ONLY
+    name: {en: "64-bit traffic counters", bg: "64-битови броячи на трафика"}
+    description: {en: "ifHCInOctets and ifHCOutOctets per port (take two samples to get a rate).", bg: "ifHCInOctets и ifHCOutOctets по портове (две измервания дават скоростта)."}
+    params:
+      - name: host
+        type: host
+        example: 192.0.2.10
+        description: {en: "Device address", bg: "Адрес на устройството"}
+    command: |-
+      snmpbulkwalk -Cr25 {{host}} IF-MIB::ifHCInOctets; snmpbulkwalk -Cr25 {{host}} IF-MIB::ifHCOutOctets
+    expected: {en: "Counter64 values per interface index.", bg: "Стойности Counter64 за всеки индекс."}
+    errors: {en: "No Such Object = the device has no 64-bit counters (SNMPv1 or very old firmware).", bg: "No Such Object = устройството няма 64-битови броячи (SNMPv1 или много стар firmware)."}
+
+  - id: snmp.interface_errors
+    risk: READ_ONLY
+    name: {en: "Interface errors and discards", bg: "Грешки и изхвърлени пакети по портове"}
+    description: {en: "ifInErrors, ifOutErrors, ifInDiscards, ifOutDiscards per port.", bg: "ifInErrors, ifOutErrors, ifInDiscards, ifOutDiscards по портове."}
+    params:
+      - name: host
+        type: host
+        example: 192.0.2.10
+        description: {en: "Device address", bg: "Адрес на устройството"}
+    command: |-
+      snmpbulkwalk -Cr25 {{host}} IF-MIB::ifInErrors; snmpbulkwalk -Cr25 {{host}} IF-MIB::ifOutErrors; snmpbulkwalk -Cr25 {{host}} IF-MIB::ifInDiscards; snmpbulkwalk -Cr25 {{host}} IF-MIB::ifOutDiscards
+    expected: {en: "Counter32 values; compare two runs — growing errors point to cabling or SFP problems.", bg: "Стойности Counter32; сравни две измервания — растящите грешки сочат кабел или SFP."}
+    errors: {en: "Discards without errors usually mean congestion.", bg: "Discards без грешки обикновено означават претоварване."}
+
+  - id: snmp.walk
+    risk: READ_ONLY
+    name: {en: "Walk an OID subtree", bg: "Обхождане на OID поддърво"}
+    description: {en: "Bulk walk below one OID or MIB name (limited output).", bg: "Обхождане под един OID или MIB име (ограничен изход)."}
+    params:
+      - name: host
+        type: host
+        example: 192.0.2.10
+        description: {en: "Device address", bg: "Адрес на устройството"}
+      - name: oid
+        type: oid
+        example: 1.3.6.1.2.1.1
+        description: {en: "Numeric OID or MIB::name", bg: "Числов OID или MIB::име"}
+    command: |-
+      snmpbulkwalk -Cr25 {{host}} {{oid}} | head -n 500
+    expected: {en: "OID = TYPE: value lines, at most 500.", bg: "Редове OID = ТИП: стойност, най-много 500."}
+    errors: {en: "'No more variables left in this MIB View' = end of the subtree or the view is restricted.", bg: "'No more variables left in this MIB View' = край на поддървото или ограничен изглед."}
+
+  - id: snmp.local_agent
+    risk: READ_ONLY
+    name: {en: "Local snmpd status", bg: "Състояние на локалния snmpd"}
+    description: {en: "Is the SNMP agent on this host running and listening on UDP 161.", bg: "Работи ли SNMP агентът на този хост и слуша ли на UDP 161."}
+    command: |-
+      systemctl is-active snmpd 2>/dev/null; ss -ulnH 'sport = :161'
+    expected: {en: "'active' and a UDP socket on :161.", bg: "'active' и UDP сокет на :161."}
+    errors: {en: "'inactive' or no socket = the agent is not running on this host.", bg: "'inactive' или без сокет = агентът не работи на този хост."}

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: "🔒 Уязвимост / Security vulnerability"
+    url: https://github.com/ykinfohome7/KSSH-FOR-Friends/security/advisories/new
+    about: "Съобщи частно, не публично / Report privately, not in a public issue"
+  - name: "⭐ Харесвам / Like it"
+    url: https://github.com/ykinfohome7/KSSH-FOR-Friends/stargazers
+    about: "Дай звезда на проекта / Give the project a star"

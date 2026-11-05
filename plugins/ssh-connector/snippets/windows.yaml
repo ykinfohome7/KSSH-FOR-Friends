@@ -1,0 +1,327 @@
+# Windows Server 2019/2022/2025 — PowerShell, Active Directory, DNS, DHCP, RDP. READ_ONLY only.
+# Runs over OpenSSH Server on Windows. Every snippet is sent as
+# "powershell -NoProfile -NonInteractive -EncodedCommand ...", so cmd.exe or PowerShell as the
+# default SSH shell both work and no quoting is lost.
+category: windows
+defaults:
+  os: [windows-server-2019, windows-server-2022, windows-server-2025]
+  shell: powershell
+  privilege: admin
+  timeout: 60
+  tags: [windows]
+snippets:
+  - id: windows.system_info
+    risk: READ_ONLY
+    name: {en: "System information", bg: "Информация за системата"}
+    description: {en: "Windows edition, build, computer name and last boot time.", bg: "Издание и build на Windows, име на компютъра и последно пускане."}
+    privilege: user
+    tags: [os, inventory]
+    command: |-
+      Get-CimInstance Win32_OperatingSystem | Select-Object CSName,Caption,Version,BuildNumber,LastBootUpTime | Format-List
+    expected: {en: "CSName, Caption (e.g. Microsoft Windows Server 2025 Standard), Version, BuildNumber, LastBootUpTime.", bg: "CSName, Caption (напр. Microsoft Windows Server 2025 Standard), Version, BuildNumber, LastBootUpTime."}
+    errors: {en: "'Access denied' over SSH for a user without remote CIM rights.", bg: "'Access denied' през SSH за потребител без права за CIM."}
+
+  - id: windows.disk_space
+    risk: READ_ONLY
+    name: {en: "Disk space", bg: "Дисково пространство"}
+    description: {en: "Size and free space of local fixed disks in GB.", bg: "Размер и свободно място на локалните дискове в GB."}
+    privilege: user
+    tags: [disk]
+    command: |-
+      Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | Select-Object DeviceID,VolumeName,@{n='SizeGB';e={[math]::Round($_.Size/1GB,1)}},@{n='FreeGB';e={[math]::Round($_.FreeSpace/1GB,1)}},@{n='FreePct';e={[math]::Round(100*$_.FreeSpace/$_.Size,1)}} | Format-Table -AutoSize
+    expected: {en: "DeviceID (C:), VolumeName, SizeGB, FreeGB, FreePct.", bg: "Колони DeviceID (C:), VolumeName, SizeGB, FreeGB, FreePct."}
+    errors: {en: "Below 10% free on C: can stop updates and Exchange transport.", bg: "Под 10% свободно на C: може да спре обновленията и Exchange transport."}
+
+  - id: windows.stopped_auto_services
+    risk: READ_ONLY
+    name: {en: "Stopped automatic services", bg: "Спрени автоматични услуги"}
+    description: {en: "Services set to start automatically that are not running.", bg: "Услуги с автоматично стартиране, които не работят."}
+    privilege: user
+    tags: [service]
+    command: |-
+      Get-CimInstance Win32_Service -Filter "StartMode='Auto' AND State!='Running'" | Select-Object Name,DisplayName,State,ExitCode | Format-Table -AutoSize
+    expected: {en: "Empty or a few lines; delayed-start services (e.g. gupdate, sppsvc) are often stopped by design.", bg: "Празно или няколко реда; услуги с отложен старт (напр. gupdate, sppsvc) често са спрени нарочно."}
+    errors: {en: "A non-zero ExitCode shows why a service stopped.", bg: "ExitCode различен от 0 показва защо услугата е спряла."}
+
+  - id: windows.service_status
+    risk: READ_ONLY
+    name: {en: "Service status", bg: "Състояние на услуга"}
+    description: {en: "Status and start type of one Windows service.", bg: "Състояние и вид стартиране на една услуга."}
+    privilege: user
+    tags: [service]
+    params:
+      - name: name
+        type: token
+        max_len: 80
+        example: TermService
+        description: {en: "Service name (not the display name), e.g. TermService, NTDS, DNS, MSExchangeTransport", bg: "Име на услугата (не показваното), напр. TermService, NTDS, DNS, MSExchangeTransport"}
+    command: |-
+      Get-Service -Name {{name}} | Format-List Name,DisplayName,Status,StartType
+    expected: {en: "Name, DisplayName, Status (Running/Stopped), StartType.", bg: "Име, показвано име, състояние (Running/Stopped) и вид стартиране."}
+    errors: {en: "'Cannot find any service with service name' — check the short name with windows.stopped_auto_services or Get-Service.", bg: "'Cannot find any service with service name' — провери краткото име."}
+
+  - id: windows.event_errors
+    risk: READ_ONLY
+    name: {en: "Recent error events", bg: "Последни грешки в Event Log"}
+    description: {en: "Latest Error-level events from the System or Application log.", bg: "Последните събития с ниво Error от System или Application."}
+    tags: [logs]
+    params:
+      - name: log
+        type: enum
+        choices: [System, Application]
+        default: System
+        description: {en: "Event log", bg: "Дневник"}
+      - name: count
+        type: int
+        min: 5
+        max: 200
+        default: 25
+        description: {en: "Number of events", bg: "Брой събития"}
+    command: |-
+      Get-WinEvent -FilterHashtable @{LogName={{log}};Level=2} -MaxEvents {{count}} -ErrorAction SilentlyContinue | Select-Object TimeCreated,ProviderName,Id,Message | Format-List
+    expected: {en: "TimeCreated, ProviderName, Id and Message for each error.", bg: "TimeCreated, ProviderName, Id и Message за всяка грешка."}
+    errors: {en: "No output = no errors in that log.", bg: "Без изход = няма грешки в този дневник."}
+
+  - id: windows.pending_reboot
+    risk: READ_ONLY
+    name: {en: "Pending reboot?", bg: "Чака ли рестарт?"}
+    description: {en: "Checks the registry flags of Component Servicing, Windows Update and file rename operations.", bg: "Проверява флаговете в регистъра от Component Servicing, Windows Update и преименуване на файлове."}
+    privilege: user
+    tags: [updates]
+    command: |-
+      $p = @(); if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') { $p += 'CBS' }; if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') { $p += 'WindowsUpdate' }; if ((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -ErrorAction SilentlyContinue).PendingFileRenameOperations) { $p += 'FileRename' }; if ($p) { 'Reboot pending: ' + ($p -join ', ') } else { 'No reboot pending' }
+    expected: {en: "'No reboot pending' or 'Reboot pending: CBS, WindowsUpdate, FileRename'.", bg: "'No reboot pending' или 'Reboot pending: CBS, WindowsUpdate, FileRename'."}
+    errors: {en: "FileRename alone is often set by installers and antivirus.", bg: "Само FileRename често се поставя от инсталатори и антивирусни програми."}
+
+  - id: windows.installed_updates
+    risk: READ_ONLY
+    name: {en: "Installed updates", bg: "Инсталирани обновления"}
+    description: {en: "Most recent hotfixes with install date.", bg: "Последните инсталирани обновления с дата."}
+    privilege: user
+    tags: [updates]
+    params:
+      - name: count
+        type: int
+        min: 5
+        max: 100
+        default: 15
+        description: {en: "Number of updates", bg: "Брой обновления"}
+    command: |-
+      Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First {{count}} HotFixID,Description,InstalledOn | Format-Table -AutoSize
+    expected: {en: "HotFixID (KB...), Description, InstalledOn.", bg: "Колони HotFixID (KB...), Description, InstalledOn."}
+    errors: {en: "Get-HotFix shows only updates registered as QFE; cumulative updates appear as Security Update.", bg: "Get-HotFix показва само QFE обновления; кумулативните се виждат като Security Update."}
+
+  - id: windows.rdp_settings
+    risk: READ_ONLY
+    name: {en: "RDP settings", bg: "Настройки на RDP"}
+    description: {en: "Is RDP enabled, is NLA required, port and security layer.", bg: "Включен ли е RDP, задължителен ли е NLA, порт и ниво на защита."}
+    tags: [rdp, security]
+    command: |-
+      $ts = Get-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server'; $rdp = Get-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'; [pscustomobject]@{RdpEnabled = ($ts.fDenyTSConnections -eq 0); NlaRequired = ($rdp.UserAuthentication -eq 1); Port = $rdp.PortNumber; SecurityLayer = $rdp.SecurityLayer} | Format-List
+    expected: {en: "RdpEnabled, NlaRequired (should be True), Port (3389), SecurityLayer (2 = TLS).", bg: "RdpEnabled, NlaRequired (трябва да е True), Port (3389), SecurityLayer (2 = TLS)."}
+    errors: {en: "Group Policy can override these values; check gpresult if they look wrong.", bg: "Group Policy може да ги промени; провери gpresult, ако изглеждат грешни."}
+
+  - id: windows.rdp_sessions
+    risk: READ_ONLY
+    name: {en: "Logged-on users (RDP)", bg: "Влезли потребители (RDP)"}
+    description: {en: "Console and RDP sessions with state and idle time.", bg: "Сесии на конзолата и RDP със състояние и време на бездействие."}
+    privilege: user
+    tags: [rdp]
+    command: |-
+      quser 2>&1
+    expected: {en: "USERNAME, SESSIONNAME, ID, STATE (Active/Disc), IDLE TIME, LOGON TIME.", bg: "Колони USERNAME, SESSIONNAME, ID, STATE (Active/Disc), IDLE TIME, LOGON TIME."}
+    errors: {en: "'No User exists for *' = nobody is logged on.", bg: "'No User exists for *' = няма влезли потребители."}
+
+  - id: windows.firewall_profiles
+    risk: READ_ONLY
+    name: {en: "Firewall profiles", bg: "Профили на защитната стена"}
+    description: {en: "Domain/Private/Public firewall profiles and default actions.", bg: "Профили Domain/Private/Public и действия по подразбиране."}
+    privilege: user
+    tags: [firewall, security]
+    command: |-
+      Get-NetFirewallProfile | Select-Object Name,Enabled,DefaultInboundAction,DefaultOutboundAction,LogBlocked | Format-Table -AutoSize
+    expected: {en: "Each profile Enabled True, inbound Block, outbound Allow.", bg: "Всеки профил Enabled True, входящо Block, изходящо Allow."}
+    errors: {en: "NotConfigured means the value comes from Group Policy or the default.", bg: "NotConfigured означава, че стойността идва от Group Policy или по подразбиране."}
+
+  - id: windows.listening_ports
+    risk: READ_ONLY
+    name: {en: "Listening TCP ports", bg: "Отворени TCP портове"}
+    description: {en: "TCP ports in Listen state with the owning process name.", bg: "TCP портове в Listen с името на процеса."}
+    tags: [network, security]
+    command: |-
+      Get-NetTCPConnection -State Listen | Sort-Object LocalPort | Select-Object LocalAddress,LocalPort,OwningProcess,@{n='Process';e={(Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue).ProcessName}} | Format-Table -AutoSize
+    expected: {en: "LocalAddress, LocalPort, OwningProcess, Process.", bg: "Колони LocalAddress, LocalPort, OwningProcess, Process."}
+    errors: {en: "Process names of system services need an elevated session.", bg: "За имената на системните процеси трябва администраторска сесия."}
+
+  - id: windows.failed_logons
+    risk: READ_ONLY
+    name: {en: "Failed logons (4625)", bg: "Неуспешни влизания (4625)"}
+    description: {en: "Latest failed logon events with account and source address.", bg: "Последните неуспешни влизания с акаунт и адрес на източника."}
+    tags: [security, logs]
+    params:
+      - name: count
+        type: int
+        min: 5
+        max: 200
+        default: 25
+        description: {en: "Number of events", bg: "Брой събития"}
+    command: |-
+      Get-WinEvent -FilterHashtable @{LogName='Security';Id=4625} -MaxEvents {{count}} -ErrorAction SilentlyContinue | Select-Object TimeCreated,@{n='Account';e={$_.Properties[5].Value}},@{n='Source';e={$_.Properties[19].Value}},@{n='LogonType';e={$_.Properties[10].Value}} | Format-Table -AutoSize
+    expected: {en: "TimeCreated, Account, Source (IP), LogonType (3 network, 10 RDP).", bg: "TimeCreated, Account, Source (IP), LogonType (3 мрежа, 10 RDP)."}
+    errors: {en: "Reading the Security log needs administrator or Event Log Readers rights.", bg: "Четенето на Security изисква администратор или група Event Log Readers."}
+
+  - id: windows.ad_domain_info
+    risk: READ_ONLY
+    name: {en: "AD domain information", bg: "Информация за AD домейна"}
+    description: {en: "Domain name, functional level and FSMO owners.", bg: "Име на домейна, функционално ниво и FSMO роли."}
+    privilege: domain-admin
+    tags: [ad]
+    command: |-
+      Import-Module ActiveDirectory; Get-ADDomain | Select-Object DNSRoot,NetBIOSName,DomainMode,PDCEmulator,RIDMaster,InfrastructureMaster | Format-List; Get-ADForest | Select-Object Name,ForestMode,SchemaMaster,DomainNamingMaster | Format-List
+    expected: {en: "DNSRoot, NetBIOSName, DomainMode and the five FSMO role holders.", bg: "DNSRoot, NetBIOSName, DomainMode и петте FSMO роли."}
+    errors: {en: "'Unable to find a default server with Active Directory Web Services running' — ADWS on the DC is stopped.", bg: "'Unable to find a default server with Active Directory Web Services running' — ADWS на DC е спрян."}
+
+  - id: windows.ad_dc_list
+    risk: READ_ONLY
+    name: {en: "Domain controllers", bg: "Домейн контролери"}
+    description: {en: "All DCs with site, IP, global catalog and OS.", bg: "Всички DC със сайт, IP, global catalog и ОС."}
+    privilege: domain-admin
+    tags: [ad]
+    command: |-
+      Import-Module ActiveDirectory; Get-ADDomainController -Filter * | Select-Object HostName,IPv4Address,Site,IsGlobalCatalog,IsReadOnly,OperatingSystem | Format-Table -AutoSize
+    expected: {en: "One line per DC.", bg: "По един ред за всеки DC."}
+    errors: {en: "Needs the RSAT AD module (installed on DCs).", bg: "Изисква RSAT AD модула (има го на DC)."}
+
+  - id: windows.ad_replication
+    risk: READ_ONLY
+    name: {en: "AD replication summary", bg: "Обобщение на AD репликацията"}
+    description: {en: "Largest replication delta and failures per DC.", bg: "Най-голямо закъснение и грешки в репликацията по DC."}
+    privilege: domain-admin
+    tags: [ad]
+    timeout: 120
+    command: |-
+      repadmin /replsummary
+    expected: {en: "Source/Destination DSA tables with largest delta, fails/total and error codes.", bg: "Таблици Source/Destination DSA с най-голямо закъснение, грешки/общо и кодове."}
+    errors: {en: "Error 1722 = RPC server unavailable (network/firewall); 8606/8614 = lingering objects / tombstone.", bg: "Грешка 1722 = RPC не е достъпен (мрежа/firewall); 8606/8614 = lingering objects / tombstone."}
+
+  - id: windows.ad_dcdiag
+    risk: READ_ONLY
+    name: {en: "dcdiag (errors only)", bg: "dcdiag (само грешки)"}
+    description: {en: "Domain controller diagnostics, printing only failed tests.", bg: "Диагностика на домейн контролера, показва само неуспешните тестове."}
+    privilege: domain-admin
+    tags: [ad]
+    timeout: 180
+    command: |-
+      dcdiag /q
+    expected: {en: "Empty output when all tests pass; otherwise the failed test and the reason.", bg: "Празен изход, ако всички тестове минат; иначе неуспешният тест и причината."}
+    errors: {en: "SystemLog failures often come from old events and are not always current problems.", bg: "Грешки в SystemLog често са от стари събития и не винаги са текущ проблем."}
+
+  - id: windows.ad_locked_users
+    risk: READ_ONLY
+    name: {en: "Locked-out accounts", bg: "Заключени акаунти"}
+    description: {en: "AD accounts that are currently locked out.", bg: "AD акаунти, които са заключени в момента."}
+    privilege: domain-admin
+    tags: [ad, security]
+    command: |-
+      Import-Module ActiveDirectory; Search-ADAccount -LockedOut | Select-Object SamAccountName,Name,LastLogonDate | Format-Table -AutoSize
+    expected: {en: "SamAccountName, Name, LastLogonDate of each locked account; empty if none.", bg: "SamAccountName, Name, LastLogonDate на всеки заключен акаунт; празно, ако няма."}
+    errors: {en: "Lockout state is per DC until it replicates; check the PDC emulator for the latest.", bg: "Заключването е по DC до репликация; най-актуално е на PDC emulator."}
+
+  - id: windows.ad_user_info
+    risk: READ_ONLY
+    name: {en: "AD user details", bg: "Данни за AD потребител"}
+    description: {en: "Enabled, locked, last logon and password dates of one user.", bg: "Активен ли е, заключен ли е, последно влизане и дати на паролата за един потребител."}
+    privilege: domain-admin
+    tags: [ad]
+    params:
+      - name: sam
+        type: token
+        max_len: 64
+        example: jdoe
+        description: {en: "sAMAccountName", bg: "sAMAccountName (потребителско име)"}
+    command: |-
+      Import-Module ActiveDirectory; Get-ADUser -Identity {{sam}} -Properties Enabled,LockedOut,LastLogonDate,PasswordLastSet,PasswordExpired,PasswordNeverExpires | Select-Object SamAccountName,Enabled,LockedOut,LastLogonDate,PasswordLastSet,PasswordExpired,PasswordNeverExpires | Format-List
+    expected: {en: "Account state and dates. No password or hash is ever shown.", bg: "Състояние и дати. Парола или хеш никога не се показват."}
+    errors: {en: "'Cannot find an object with identity' — wrong user name.", bg: "'Cannot find an object with identity' — грешно потребителско име."}
+
+  - id: windows.ad_fsmo
+    risk: READ_ONLY
+    name: {en: "FSMO roles", bg: "FSMO роли"}
+    description: {en: "Holders of the five FSMO roles.", bg: "Притежатели на петте FSMO роли."}
+    privilege: domain-admin
+    tags: [ad]
+    command: |-
+      netdom query fsmo
+    expected: {en: "Schema master, Domain naming master, PDC, RID pool manager, Infrastructure master.", bg: "Сървърите за Schema master, Domain naming master, PDC, RID pool manager, Infrastructure master."}
+    errors: {en: "netdom exists on DCs and with RSAT.", bg: "netdom има на DC и с RSAT."}
+
+  - id: windows.dns_zones
+    risk: READ_ONLY
+    name: {en: "DNS zones", bg: "DNS зони"}
+    description: {en: "Zones on this DNS server with type and AD integration.", bg: "Зоните на този DNS сървър с тип и интеграция с AD."}
+    tags: [dns]
+    command: |-
+      Get-DnsServerZone | Select-Object ZoneName,ZoneType,IsDsIntegrated,IsReverseLookupZone,DynamicUpdate | Format-Table -AutoSize
+    expected: {en: "ZoneName, ZoneType (Primary/Secondary/Forwarder), IsDsIntegrated, IsReverseLookupZone, DynamicUpdate.", bg: "Колони ZoneName, ZoneType (Primary/Secondary/Forwarder), IsDsIntegrated, IsReverseLookupZone, DynamicUpdate."}
+    errors: {en: "Needs the DNS Server role or RSAT DNS tools.", bg: "Изисква ролята DNS Server или RSAT DNS."}
+
+  - id: windows.dns_forwarders
+    risk: READ_ONLY
+    name: {en: "DNS forwarders", bg: "DNS препращане (forwarders)"}
+    description: {en: "Upstream DNS servers used by this DNS server.", bg: "Външните DNS сървъри, към които препраща този сървър."}
+    tags: [dns]
+    command: |-
+      Get-DnsServerForwarder | Format-List IPAddress,UseRootHint,Timeout
+    expected: {en: "IPAddress list, UseRootHint, Timeout.", bg: "Списък IPAddress, UseRootHint, Timeout."}
+    errors: {en: "Empty IPAddress = root hints only.", bg: "Празен IPAddress = само root hints."}
+
+  - id: windows.dns_resolve
+    risk: READ_ONLY
+    name: {en: "DNS query", bg: "DNS заявка"}
+    description: {en: "Resolve a name and record type with Resolve-DnsName.", bg: "Превежда име и тип запис с Resolve-DnsName."}
+    privilege: user
+    tags: [dns]
+    params:
+      - name: name
+        type: host
+        example: example.com
+        description: {en: "Name to resolve", bg: "Име за превод"}
+      - name: type
+        type: enum
+        choices: [A, AAAA, MX, CNAME, TXT, SRV, PTR, NS, SOA]
+        default: A
+        description: {en: "Record type", bg: "Тип запис"}
+    command: |-
+      Resolve-DnsName -Name {{name}} -Type {{type}} -DnsOnly | Format-Table -AutoSize
+    expected: {en: "Name, Type, TTL and the data (IPAddress, NameExchange, Strings ...).", bg: "Name, Type, TTL и данните (IPAddress, NameExchange, Strings ...)."}
+    errors: {en: "'DNS name does not exist' = NXDOMAIN.", bg: "'DNS name does not exist' = няма такова име (NXDOMAIN)."}
+
+  - id: windows.dhcp_scopes
+    risk: READ_ONLY
+    name: {en: "DHCP scopes", bg: "DHCP обхвати"}
+    description: {en: "IPv4 scopes with range, state and lease time.", bg: "IPv4 обхвати с диапазон, състояние и време на lease."}
+    tags: [dhcp]
+    command: |-
+      Get-DhcpServerv4Scope | Select-Object ScopeId,Name,State,StartRange,EndRange,LeaseDuration | Format-Table -AutoSize
+    expected: {en: "One line per scope; State Active/Inactive.", bg: "По един ред за обхват; State Active/Inactive."}
+    errors: {en: "Needs the DHCP Server role or RSAT DHCP tools.", bg: "Изисква ролята DHCP Server или RSAT DHCP."}
+
+  - id: windows.dhcp_usage
+    risk: READ_ONLY
+    name: {en: "DHCP scope usage", bg: "Заетост на DHCP обхватите"}
+    description: {en: "Free and used addresses per scope.", bg: "Свободни и заети адреси във всеки обхват."}
+    tags: [dhcp]
+    command: |-
+      Get-DhcpServerv4ScopeStatistics | Select-Object ScopeId,Free,InUse,Reserved,PercentageInUse | Format-Table -AutoSize
+    expected: {en: "ScopeId, Free, InUse, Reserved, PercentageInUse.", bg: "Колони ScopeId, Free, InUse, Reserved, PercentageInUse."}
+    errors: {en: "Above 90% in use, new clients may get no address.", bg: "Над 90% заетост новите клиенти може да не получат адрес."}
+
+  - id: windows.dhcp_failover
+    risk: READ_ONLY
+    name: {en: "DHCP failover", bg: "DHCP резервиране (failover)"}
+    description: {en: "Failover relationships, partner and state.", bg: "Failover връзки, партньор и състояние."}
+    tags: [dhcp]
+    command: |-
+      Get-DhcpServerv4Failover | Select-Object Name,PartnerServer,Mode,State,ScopeId | Format-List
+    expected: {en: "State Normal on both partners.", bg: "State Normal и при двата партньора."}
+    errors: {en: "No output = no failover configured. CommunicationInterrupted = partner unreachable.", bg: "Без изход = няма failover. CommunicationInterrupted = партньорът е недостъпен."}

@@ -1,0 +1,85 @@
+# UniFi — read-only diagnostics over SSH on UniFi devices and UniFi OS consoles.
+# Device SSH must be enabled in the UniFi Network application (Settings -> System -> Device SSH
+# Authentication). Commands differ between firmware versions; verify on your hardware first.
+category: unifi
+defaults:
+  os: [unifi-device, unifi-os]
+  shell: posix
+  privilege: admin
+  timeout: 30
+  tags: [unifi]
+snippets:
+  - id: unifi.device_info
+    risk: READ_ONLY
+    name: {en: "Device info", bg: "Информация за устройството"}
+    description: {en: "Model, firmware, MAC, IP, uptime and controller (inform) status of a UniFi switch or AP.", bg: "Модел, firmware, MAC, IP, време на работа и връзка с контролера на UniFi switch или AP."}
+    os: [unifi-device]
+    command: |-
+      info
+    expected: {en: "Model, Version, MAC Address, IP Address, Hostname, Uptime, Status (Connected (http://.../inform)).", bg: "Model, Version, MAC Address, IP Address, Hostname, Uptime и Status (Connected (http://.../inform))."}
+    errors: {en: "Status 'Unknown' or 'Server Reject' = adoption problem with the controller.", bg: "Status 'Unknown' или 'Server Reject' = проблем с adopt към контролера."}
+
+  - id: unifi.console_info
+    risk: READ_ONLY
+    name: {en: "UniFi OS console info", bg: "Информация за UniFi OS конзолата"}
+    description: {en: "Model, firmware and hardware summary of a UniFi OS console.", bg: "Модел, firmware и хардуер на UniFi OS конзола."}
+    os: [unifi-os]
+    command: |-
+      ubnt-device-info summary 2>/dev/null || cat /etc/os-release
+    expected: {en: "Model, firmware version, MAC and serial.", bg: "Модел, версия на firmware, MAC и сериен номер."}
+    errors: {en: "Older UniFi OS releases may lack ubnt-device-info; os-release is shown instead.", bg: "По-старите UniFi OS може да нямат ubnt-device-info; показва се os-release."}
+
+  - id: unifi.version
+    risk: READ_ONLY
+    name: {en: "Firmware and kernel", bg: "Firmware и ядро"}
+    description: {en: "Firmware version file, kernel and uptime.", bg: "Файл с версията на firmware, ядро и време на работа."}
+    command: |-
+      cat /etc/version 2>/dev/null; uname -a; uptime
+    expected: {en: "Firmware string such as US.mt7621.v7.1.26..., the kernel line and uptime.", bg: "Версия на firmware като US.mt7621.v7.1.26..., ред с ядрото и време на работа."}
+    errors: {en: "/etc/version is missing on some consoles; the kernel line still identifies the device.", bg: "/etc/version липсва на някои конзоли; редът с ядрото пак разпознава устройството."}
+
+  - id: unifi.interfaces
+    risk: READ_ONLY
+    name: {en: "Interfaces", bg: "Интерфейси"}
+    description: {en: "Interfaces, addresses and link state on the device.", bg: "Интерфейси, адреси и състояние на връзката на устройството."}
+    tags: [network]
+    command: |-
+      ip -br addr 2>/dev/null || ifconfig
+    expected: {en: "br0/eth0/switch interfaces with addresses and UP/DOWN.", bg: "Интерфейси br0/eth0/switch с адреси и UP/DOWN."}
+    errors: {en: "BusyBox ip may not support -br; ifconfig is used instead.", bg: "BusyBox ip може да не поддържа -br; използва се ifconfig."}
+
+  - id: unifi.inform_url
+    risk: READ_ONLY
+    name: {en: "Controller address (inform URL)", bg: "Адрес на контролера (inform URL)"}
+    description: {en: "The controller URL the device reports to (no keys are printed).", bg: "Адресът на контролера, към който докладва устройството (без ключове)."}
+    os: [unifi-device]
+    command: |-
+      grep -E '^mgmt\.servers\.[0-9]+\.url=' /var/etc/persistent/cfg/mgmt 2>/dev/null || echo "no inform URL stored"
+    expected: {en: "mgmt.servers.1.url=http://<controller>:8080/inform.", bg: "mgmt.servers.1.url=http://<контролер>:8080/inform."}
+    errors: {en: "Only the url line is printed; the authkey in the same file is never shown.", bg: "Показва се само редът с url; authkey от същия файл никога не се показва."}
+
+  - id: unifi.network_services
+    risk: READ_ONLY
+    name: {en: "UniFi services on the console", bg: "UniFi услуги на конзолата"}
+    description: {en: "systemd services of the UniFi applications and whether they run.", bg: "systemd услугите на UniFi приложенията и дали работят."}
+    os: [unifi-os]
+    tags: [service]
+    command: |-
+      systemctl list-units --type=service --no-pager --no-legend | grep -Ei 'unifi|ulp|uid'
+    expected: {en: "Lines with unifi-core / unifi services in state 'running'.", bg: "Редове с unifi-core / unifi услуги в състояние 'running'."}
+    errors: {en: "Service names change between UniFi OS versions; an empty list may only mean different names.", bg: "Имената се сменят между версиите на UniFi OS; празен списък може да значи само различни имена."}
+
+  - id: unifi.uplink_ping
+    risk: READ_ONLY
+    name: {en: "Ping from the device", bg: "Ping от устройството"}
+    description: {en: "Ping a host from the UniFi device (e.g. gateway or controller).", bg: "Ping до хост от UniFi устройството (напр. gateway или контролер)."}
+    tags: [network, troubleshooting]
+    params:
+      - name: host
+        type: host
+        example: 192.0.2.1
+        description: {en: "Host name or IP", bg: "Име или IP адрес"}
+    command: |-
+      ping -c 4 {{host}}
+    expected: {en: "4 replies and 0% packet loss.", bg: "4 отговора и 0% загуби."}
+    errors: {en: "Loss here but not from other hosts = uplink or VLAN of this device.", bg: "Загуби оттук, но не от други хостове = uplink или VLAN на това устройство."}

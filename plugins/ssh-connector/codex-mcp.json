@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "ssh": {
+      "command": "sh",
+      "args": ["./bin/run.sh"],
+      "cwd": ".",
+      "tool_timeout_sec": 300
+    }
+  }
+}

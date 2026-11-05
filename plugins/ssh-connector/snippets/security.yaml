@@ -1,0 +1,170 @@
+# Cybersecurity — TLS, certificates, SSH, logs, monitoring. READ_ONLY only.
+category: security
+defaults:
+  os: [debian, ubuntu, rhel, rocky, proxmox-ve, proxmox-mail-gateway]
+  shell: posix
+  privilege: user
+  timeout: 30
+  tags: [security]
+snippets:
+  - id: security.tls_certificate
+    risk: READ_ONLY
+    name: {en: "Remote TLS certificate", bg: "TLS сертификат на отдалечен сървър"}
+    description: {en: "Subject, issuer, validity dates and SAN names of the certificate a server presents.", bg: "Subject, издател, срок на валидност и SAN имена на сертификата, който сървърът показва."}
+    tags: [tls, certificate]
+    params:
+      - name: host
+        type: host
+        example: example.com
+        description: {en: "Server name (also sent as SNI)", bg: "Име на сървъра (изпраща се и като SNI)"}
+      - name: port
+        type: port
+        default: 443
+        description: {en: "TCP port", bg: "TCP порт"}
+    command: |-
+      openssl s_client -connect {{host}}:{{port}} -servername {{host}} </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer -dates -ext subjectAltName
+    expected: {en: "subject=, issuer=, notBefore=, notAfter= and the DNS names.", bg: "subject=, issuer=, notBefore=, notAfter= и DNS имената."}
+    errors: {en: "'unable to load certificate' = no TLS on that port or connection refused.", bg: "'unable to load certificate' = няма TLS на този порт или връзката е отказана."}
+
+  - id: security.tls_verify
+    risk: READ_ONLY
+    name: {en: "TLS chain verification", bg: "Проверка на TLS веригата"}
+    description: {en: "Does the server certificate chain verify against the system trust store.", bg: "Проверява се веригата на сертификата спрямо доверените CA в системата."}
+    tags: [tls, certificate]
+    params:
+      - name: host
+        type: host
+        example: example.com
+        description: {en: "Server name", bg: "Име на сървъра"}
+      - name: port
+        type: port
+        default: 443
+        description: {en: "TCP port", bg: "TCP порт"}
+    command: |-
+      openssl s_client -connect {{host}}:{{port}} -servername {{host}} -verify_return_error -brief </dev/null 2>&1 | head -n 20
+    expected: {en: "'Verification: OK', protocol version (TLSv1.3) and cipher.", bg: "'Verification: OK', версия на протокола (TLSv1.3) и шифър."}
+    errors: {en: "'verify error:num=20/21' = missing intermediate certificate; 'num=10' = expired.", bg: "'verify error:num=20/21' = липсва междинен сертификат; 'num=10' = изтекъл."}
+
+  - id: security.smtp_starttls
+    risk: READ_ONLY
+    name: {en: "SMTP STARTTLS certificate", bg: "SMTP STARTTLS сертификат"}
+    description: {en: "Certificate offered by a mail server after STARTTLS on port 25 or 587.", bg: "Сертификатът на пощенски сървър след STARTTLS на порт 25 или 587."}
+    tags: [tls, smtp, mail]
+    params:
+      - name: host
+        type: host
+        example: mail.example.com
+        description: {en: "Mail server", bg: "Пощенски сървър"}
+      - name: port
+        type: port
+        default: 25
+        description: {en: "SMTP port", bg: "SMTP порт"}
+    command: |-
+      openssl s_client -connect {{host}}:{{port}} -starttls smtp -servername {{host}} </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer -dates
+    expected: {en: "subject, issuer and dates of the SMTP certificate.", bg: "subject, издател и дати на SMTP сертификата."}
+    errors: {en: "Port 25 is often blocked by ISPs from home and cloud networks.", bg: "Порт 25 често е спрян от доставчиците за домашни и облачни мрежи."}
+
+  - id: security.certificate_file
+    risk: READ_ONLY
+    name: {en: "Local certificate file", bg: "Локален файл със сертификат"}
+    description: {en: "Subject, issuer and expiry of a PEM certificate on disk.", bg: "Subject, издател и изтичане на PEM сертификат на диска."}
+    tags: [tls, certificate]
+    params:
+      - name: path
+        type: path
+        example: /etc/ssl/certs/ssl-cert-snakeoil.pem
+        description: {en: "Absolute path to a PEM certificate (not a private key)", bg: "Пълен път до PEM сертификат (не частен ключ)"}
+    command: |-
+      openssl x509 -in {{path}} -noout -subject -issuer -enddate -checkend 2592000
+    expected: {en: "Subject, issuer, notAfter and 'Certificate will not expire' (30 days ahead).", bg: "Subject, издател, notAfter и 'Certificate will not expire' (30 дни напред)."}
+    errors: {en: "'Certificate will expire' (exit 1) = less than 30 days left.", bg: "'Certificate will expire' (код 1) = остават под 30 дни."}
+
+  - id: security.sshd_settings
+    risk: READ_ONLY
+    name: {en: "SSH server settings", bg: "Настройки на SSH сървъра"}
+    description: {en: "Effective sshd settings that matter for security.", bg: "Действащите настройки на sshd, важни за сигурността."}
+    privilege: root
+    tags: [ssh, audit]
+    command: |-
+      sshd -T 2>/dev/null | grep -Ei '^(port|listenaddress|permitrootlogin|passwordauthentication|pubkeyauthentication|kbdinteractiveauthentication|permitemptypasswords|x11forwarding|maxauthtries|allowusers|allowgroups|ciphers|kexalgorithms) '
+    expected: {en: "Recommended: permitrootlogin no or prohibit-password, passwordauthentication no, pubkeyauthentication yes.", bg: "Препоръчително: permitrootlogin no или prohibit-password, passwordauthentication no, pubkeyauthentication yes."}
+    errors: {en: "Empty output = sshd -T needs root.", bg: "Празен изход = sshd -T изисква root."}
+
+  - id: security.ssh_host_keys
+    risk: READ_ONLY
+    name: {en: "SSH host key fingerprints", bg: "Отпечатъци на SSH host ключовете"}
+    description: {en: "SHA256 fingerprints of this server's SSH host keys, to verify known_hosts.", bg: "SHA256 отпечатъци на SSH host ключовете на сървъра, за проверка на known_hosts."}
+    tags: [ssh]
+    command: |-
+      for k in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$k"; done
+    expected: {en: "256 SHA256:... root@host (ED25519) and the other key types.", bg: "256 SHA256:... root@host (ED25519) и останалите видове ключове."}
+    errors: {en: "Only public keys are read; private host keys are never touched.", bg: "Четат се само публичните ключове; частните не се пипат."}
+
+  - id: security.failed_ssh_logins
+    risk: READ_ONLY
+    name: {en: "Failed SSH logins today", bg: "Неуспешни SSH влизания днес"}
+    description: {en: "Failed passwords and invalid users from the SSH journal.", bg: "Грешни пароли и несъществуващи потребители от журнала на SSH."}
+    privilege: sudo
+    tags: [ssh, logs]
+    params:
+      - name: lines
+        type: int
+        min: 10
+        max: 500
+        default: 50
+        description: {en: "Number of lines", bg: "Брой редове"}
+    command: |-
+      journalctl -u ssh -u sshd --since today --no-pager 2>/dev/null | grep -Ei 'failed|invalid user' | tail -n {{lines}}
+    expected: {en: "'Failed password for <user> from <ip>' / 'Invalid user <name> from <ip>'.", bg: "'Failed password for <потребител> from <ip>' / 'Invalid user <име> from <ip>'."}
+    errors: {en: "Many lines from few IPs = brute force; consider fail2ban (security.fail2ban).", bg: "Много редове от малко IP = brute force; помисли за fail2ban (security.fail2ban)."}
+
+  - id: security.sudo_log
+    risk: READ_ONLY
+    name: {en: "sudo usage", bg: "Използване на sudo"}
+    description: {en: "Recent sudo commands from the journal.", bg: "Последните sudo команди от журнала."}
+    privilege: sudo
+    tags: [audit, logs]
+    params:
+      - name: lines
+        type: int
+        min: 10
+        max: 500
+        default: 50
+        description: {en: "Number of lines", bg: "Брой редове"}
+    command: |-
+      journalctl _COMM=sudo -n {{lines}} --no-pager
+    expected: {en: "'<user> : TTY=... ; PWD=... ; USER=root ; COMMAND=...' lines.", bg: "Редове '<потребител> : TTY=... ; PWD=... ; USER=root ; COMMAND=...'."}
+    errors: {en: "Commands may contain sensitive arguments; share the output carefully.", bg: "Командите може да съдържат чувствителни аргументи; споделяй внимателно."}
+
+  - id: security.fail2ban
+    risk: READ_ONLY
+    name: {en: "fail2ban status", bg: "Състояние на fail2ban"}
+    description: {en: "Active jails and banned IP counts.", bg: "Активни jail-ове и брой блокирани IP."}
+    privilege: root
+    tags: [ssh, monitoring]
+    command: |-
+      fail2ban-client status 2>/dev/null && fail2ban-client status sshd 2>/dev/null || echo "fail2ban is not installed or not running"
+    expected: {en: "Jail list and for sshd: Currently failed / Total banned / Banned IP list.", bg: "Списък с jail-ове и за sshd: Currently failed / Total banned / Banned IP list."}
+    errors: {en: "'not installed or not running' — consider installing it (a CHANGE, needs approval).", bg: "'not installed or not running' — помисли за инсталиране (това е CHANGE, иска одобрение)."}
+
+  - id: security.firewall_rules_linux
+    risk: READ_ONLY
+    name: {en: "Linux firewall rules", bg: "Правила на Linux firewall"}
+    description: {en: "Loaded nftables ruleset, or iptables rules on older systems.", bg: "Заредените nftables правила или iptables при по-стари системи."}
+    privilege: root
+    tags: [firewall]
+    command: |-
+      nft list ruleset 2>/dev/null | head -n 300 || iptables -S
+    expected: {en: "table/chain/rule definitions with policies (accept/drop).", bg: "Дефиниции table/chain/rule с политики (accept/drop)."}
+    errors: {en: "Empty output = no rules loaded (everything allowed).", bg: "Празен изход = няма заредени правила (всичко е разрешено)."}
+
+  - id: security.listening_exposure
+    risk: READ_ONLY
+    name: {en: "Services listening on all addresses", bg: "Услуги, слушащи на всички адреси"}
+    description: {en: "TCP listeners bound to 0.0.0.0 or [::] (reachable from every network).", bg: "TCP услуги на 0.0.0.0 или [::] (достъпни от всяка мрежа)."}
+    privilege: sudo
+    tags: [audit, network]
+    command: |-
+      ss -tlnpH | awk '$4 ~ /^(0\.0\.0\.0|\[::\]|\*):/'
+    expected: {en: "One line per exposed listener with the process name.", bg: "По един ред за всяка изложена услуга с името на процеса."}
+    errors: {en: "Services meant only for localhost (e.g. an MCP backend) must not appear here.", bg: "Услуги само за localhost (напр. MCP backend) не трябва да са тук."}

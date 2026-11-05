@@ -1,0 +1,66 @@
+# Copy to ~/.ssh-connector/servers.yaml and edit. Path can be overridden with SSH_CONNECTOR_CONFIG.
+defaults:
+  user: root
+  port: 22
+  key: ~/.ssh/id_ed25519
+  max_sessions: 10        # sshd MaxSessions default is 10
+  connect_timeout: 8      # seconds per connection attempt
+  command_timeout: 120    # default timeout for run_command
+  keepalive_interval: 30
+  keepalive_count_max: 3
+  retries: 3              # attempts per address before failing over
+  known_hosts: ~/.ssh/known_hosts   # null disables host key checking (not recommended)
+
+servers:
+  bastion:
+    os: debian
+    hosts: [bastion.example.com]
+    tags: [infra]
+  web1:
+    os: debian
+    hosts: [203.0.113.10, 198.51.100.10]   # first is primary, the rest are fallbacks
+    tags: [web, prod]
+  db1:
+    os: redhat
+    user: admin
+    hosts: [10.0.0.20]
+    jump: bastion          # reach db1 through the bastion server (ProxyJump)
+    tags: [db, prod]
+
+snippets:                  # saved commands, run with run_snippet
+  disk: df -h
+  mem: free -m
+  failed: systemctl --failed --no-legend
+  top: ps aux --sort=-%cpu | head -15
+  update_debian: apt-get update && apt-get -y upgrade
+  update_redhat: dnf -y upgrade
+
+snmp:                      # read-only SNMP monitoring (snmp_* commands); no SNMP SET exists
+  allowed_networks:        # required: every device host must be inside these
+    - 192.0.2.10/32
+  devices:
+    realhd-switch:
+      host: 192.0.2.10     # documentation address - replace with your switch
+      adapter: realhd      # generic | realhd | cisco | unifi
+      version: "3"         # "1"/"2c" only with allow_legacy_snmp: true and community_env
+      user: monitor
+      security_level: authPriv
+      auth_protocol: SHA   # SHA, SHA224, SHA256, SHA384, SHA512
+      priv_protocol: AES   # AES, AES192, AES256; DES only with allow_legacy_des: true
+      auth_env: KSSH_SNMP_AUTH_PASS   # NAME of an environment variable, never the password
+      priv_env: KSSH_SNMP_PRIV_PASS
+      timeout: 2
+      retries: 1
+
+rdp:                       # read-only RDP / Windows commands (rdp_check, rdp_tunnel, rdp_sessions, windows_health)
+  allowed_networks:        # required: every target host must be inside these
+    - 192.0.2.20/32
+  targets:
+    win-server:
+      host: 192.0.2.20     # documentation address - replace with your Windows host
+      port: 3389
+      via: bastion         # optional: SSH server profile (from servers:) used for rdp_check / rdp_tunnel
+      server_name: win-server.example.lan   # name expected in the TLS certificate (default: host)
+      # ca_file: ~/.ssh-connector/win-server-rdp.pem   # trust this cert/CA to verify RDP TLS
+      user: EXAMPLE\administrator           # only written into the .rdp file; no password anywhere
+      timeout: 5

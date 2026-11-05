@@ -1,0 +1,182 @@
+# Linux — Debian, Ubuntu, RHEL, Rocky Linux. READ_ONLY only.
+category: linux
+defaults:
+  os: [debian, ubuntu, rhel, rocky]
+  shell: posix
+  privilege: user
+  timeout: 30
+snippets:
+  - id: linux.system_info
+    risk: READ_ONLY
+    name: {en: "System information", bg: "Информация за системата"}
+    description: {en: "Kernel, distribution, host name and uptime.", bg: "Ядро, дистрибуция, име на хоста и време от последното пускане."}
+    smoke: true
+    tags: [os, inventory]
+    command: |-
+      uname -a; cat /etc/os-release; uptime
+    expected: {en: "uname line, os-release fields (NAME, VERSION_ID) and the load average.", bg: "Ред от uname, полета от os-release (NAME, VERSION_ID) и средно натоварване."}
+    errors: {en: "Missing /etc/os-release only on very old systems; the other commands still run.", bg: "Липсващ /etc/os-release само при много стари системи; другите команди пак се изпълняват."}
+
+  - id: linux.disk_usage
+    risk: READ_ONLY
+    name: {en: "Disk usage", bg: "Заето дисково място"}
+    description: {en: "Used and free space per real file system (no tmpfs).", bg: "Заето и свободно място по реални файлови системи (без tmpfs)."}
+    smoke: true
+    tags: [disk]
+    command: |-
+      df -hT -x tmpfs -x devtmpfs
+    expected: {en: "Table with file system, type, size, used, available, use% and mount point.", bg: "Таблица с файлова система, тип, размер, заето, свободно, % и точка на монтиране."}
+    errors: {en: "A hung network mount can make df wait until the timeout.", bg: "Блокирал мрежов mount може да задържи df до изтичане на времето."}
+
+  - id: linux.memory
+    risk: READ_ONLY
+    name: {en: "Memory and swap", bg: "Памет и swap"}
+    description: {en: "RAM and swap usage in MiB.", bg: "Използване на RAM и swap в MiB."}
+    smoke: true
+    tags: [memory]
+    command: |-
+      free -m; swapon --show 2>/dev/null || true
+    expected: {en: "free table (total, used, free, available) and active swap devices.", bg: "Таблица от free (общо, заето, свободно, налично) и активни swap устройства."}
+    errors: {en: "Empty swap list means no swap is configured.", bg: "Празен списък за swap означава, че няма настроен swap."}
+
+  - id: linux.top_processes
+    risk: READ_ONLY
+    name: {en: "Top processes by CPU", bg: "Процеси с най-голямо натоварване на CPU"}
+    description: {en: "Processes sorted by CPU usage with memory and run time.", bg: "Процеси, подредени по CPU, с памет и време на работа."}
+    smoke: true
+    tags: [cpu, process]
+    params:
+      - name: count
+        type: int
+        min: 5
+        max: 50
+        default: 15
+        description: {en: "Number of lines", bg: "Брой редове"}
+    command: |-
+      ps -eo pid,user,%cpu,%mem,etime,comm --sort=-%cpu | head -n {{count}}
+    expected: {en: "PID, user, %CPU, %MEM, elapsed time and command name.", bg: "PID, потребител, %CPU, %MEM, време на работа и име на командата."}
+    errors: {en: "BusyBox ps does not support --sort; use a full procps system.", bg: "BusyBox ps не поддържа --sort; трябва пълен procps."}
+
+  - id: linux.failed_units
+    risk: READ_ONLY
+    name: {en: "Failed systemd units", bg: "Неуспешни systemd услуги"}
+    description: {en: "Units that systemd marks as failed.", bg: "Услуги, които systemd отбелязва като неуспешни."}
+    tags: [systemd, service]
+    command: |-
+      systemctl --failed --no-legend --no-pager
+    expected: {en: "Empty output when nothing failed, otherwise one line per failed unit.", bg: "Празен изход, ако няма проблеми, иначе по един ред за всяка неуспешна услуга."}
+    errors: {en: "'System has not been booted with systemd' in containers without systemd.", bg: "'System has not been booted with systemd' в контейнери без systemd."}
+
+  - id: linux.service_status
+    risk: READ_ONLY
+    name: {en: "Service status", bg: "Състояние на услуга"}
+    description: {en: "Status, recent log lines and main PID of one systemd service.", bg: "Състояние, последни редове от лога и главен PID на една systemd услуга."}
+    tags: [systemd, service]
+    params:
+      - name: unit
+        type: token
+        max_len: 128
+        example: ssh
+        description: {en: "Unit name, e.g. ssh, nginx, postfix@-", bg: "Име на услугата, напр. ssh, nginx, postfix@-"}
+    command: |-
+      systemctl status {{unit}} --no-pager -l
+    expected: {en: "Loaded/Active lines and the last journal lines. Exit code 3 = unit is not running.", bg: "Редове Loaded/Active и последните редове от журнала. Код 3 = услугата не работи."}
+    errors: {en: "Exit code 4 = no such unit. Reading other users' logs may need sudo.", bg: "Код 4 = няма такава услуга. За чужди логове може да трябва sudo."}
+
+  - id: linux.journal_errors
+    risk: READ_ONLY
+    name: {en: "Errors since boot", bg: "Грешки от последното пускане"}
+    description: {en: "Journal entries with priority err or worse since the last boot.", bg: "Записи в журнала с приоритет err или по-висок от последното пускане."}
+    privilege: sudo
+    tags: [logs]
+    params:
+      - name: lines
+        type: int
+        min: 10
+        max: 500
+        default: 50
+        description: {en: "Maximum lines", bg: "Максимален брой редове"}
+    command: |-
+      journalctl -p err -b -n {{lines}} --no-pager
+    expected: {en: "Time, host, unit and message of each error.", bg: "Време, хост, услуга и съобщение за всяка грешка."}
+    errors: {en: "Without journal read rights only your own entries are shown (add the user to systemd-journal or adm).", bg: "Без права за журнала се показват само собствените записи (групи systemd-journal или adm)."}
+
+  - id: linux.listening_ports
+    risk: READ_ONLY
+    name: {en: "Listening ports", bg: "Отворени портове"}
+    description: {en: "TCP and UDP sockets in LISTEN state with the owning process.", bg: "TCP и UDP сокети в състояние LISTEN с процеса собственик."}
+    privilege: sudo
+    tags: [network, security]
+    command: |-
+      ss -tulpn
+    expected: {en: "Netid, state, local address:port and users:(process,pid).", bg: "Netid, състояние, локален адрес:порт и users:(процес,pid)."}
+    errors: {en: "Process names are empty without root/sudo; ports are still listed.", bg: "Без root/sudo имената на процесите липсват; портовете пак се показват."}
+
+  - id: linux.updates_debian
+    risk: READ_ONLY
+    name: {en: "Available updates (Debian/Ubuntu)", bg: "Налични обновления (Debian/Ubuntu)"}
+    description: {en: "Packages with a newer version in the local APT cache. Does not refresh or install anything.", bg: "Пакети с по-нова версия в локалния APT кеш. Не обновява кеша и не инсталира нищо."}
+    os: [debian, ubuntu]
+    tags: [packages, updates]
+    command: |-
+      apt list --upgradable 2>/dev/null
+    expected: {en: "'Listing...' followed by package/suite new-version [upgradable from: old].", bg: "'Listing...' и после пакет/издание нова-версия [upgradable from: стара]."}
+    errors: {en: "The list is only as fresh as the last 'apt update' run by the administrator.", bg: "Списъкът е толкова актуален, колкото последното 'apt update' от администратора."}
+
+  - id: linux.updates_rhel
+    risk: READ_ONLY
+    name: {en: "Available updates (RHEL/Rocky)", bg: "Налични обновления (RHEL/Rocky)"}
+    description: {en: "Packages with updates according to the local dnf cache (-C: no download).", bg: "Пакети с обновления според локалния dnf кеш (-C: без изтегляне)."}
+    os: [rhel, rocky]
+    tags: [packages, updates]
+    command: |-
+      dnf -q -C check-update; rc=$?; [ "$rc" -eq 100 ] && exit 0 || exit "$rc"
+    expected: {en: "One line per package with an update; empty output and exit 0 when up to date.", bg: "По един ред за всеки пакет с обновление; празен изход и код 0, ако всичко е актуално."}
+    errors: {en: "'Cache-only enabled but no cache' — the administrator must refresh metadata first.", bg: "'Cache-only enabled but no cache' — администраторът трябва първо да обнови метаданните."}
+
+  - id: linux.reboot_required
+    risk: READ_ONLY
+    name: {en: "Reboot required?", bg: "Нужен ли е рестарт?"}
+    description: {en: "Debian/Ubuntu reboot flag or RHEL needs-restarting result.", bg: "Флагът за рестарт на Debian/Ubuntu или резултатът от needs-restarting на RHEL."}
+    tags: [updates]
+    command: |-
+      if [ -f /var/run/reboot-required ]; then cat /var/run/reboot-required /var/run/reboot-required.pkgs 2>/dev/null; elif command -v needs-restarting >/dev/null 2>&1; then needs-restarting -r; else echo "no reboot flag found"; fi
+    expected: {en: "'*** System restart required ***' with packages, 'Reboot is required' or 'no reboot flag found'.", bg: "'*** System restart required ***' с пакетите, 'Reboot is required' или 'no reboot flag found'."}
+    errors: {en: "needs-restarting comes from dnf-utils / yum-utils; exit 1 from it means a reboot is needed.", bg: "needs-restarting е от dnf-utils / yum-utils; код 1 от него означава, че е нужен рестарт."}
+
+  - id: linux.last_logins
+    risk: READ_ONLY
+    name: {en: "Last logins", bg: "Последни влизания"}
+    description: {en: "Recent logins from wtmp with full host names.", bg: "Последни влизания от wtmp с пълните имена на хостовете."}
+    tags: [security, logins]
+    params:
+      - name: count
+        type: int
+        min: 5
+        max: 100
+        default: 20
+        description: {en: "Number of entries", bg: "Брой записи"}
+    command: |-
+      last -n {{count}} -w
+    expected: {en: "User, terminal, source host, login and logout time.", bg: "Потребител, терминал, източник, време на влизане и излизане."}
+    errors: {en: "Debian 13 and newer may not ship wtmp; use 'lastlog2' or the journal instead.", bg: "Debian 13 и по-нови може да нямат wtmp; използвай 'lastlog2' или журнала."}
+
+  - id: linux.time_sync
+    risk: READ_ONLY
+    name: {en: "Time synchronisation", bg: "Синхронизация на часовника"}
+    description: {en: "System clock, time zone and NTP status.", bg: "Системен часовник, часова зона и състояние на NTP."}
+    tags: [time, ntp]
+    command: |-
+      timedatectl status 2>/dev/null; chronyc tracking 2>/dev/null || true
+    expected: {en: "'System clock synchronized: yes' and chrony offset when chrony is used.", bg: "'System clock synchronized: yes' и отклонение от chrony, ако се използва chrony."}
+    errors: {en: "'NTP service: inactive' means no time sync — Kerberos and TLS can fail.", bg: "'NTP service: inactive' означава липса на синхронизация — Kerberos и TLS могат да се провалят."}
+
+  - id: linux.block_devices
+    risk: READ_ONLY
+    name: {en: "Disks and partitions", bg: "Дискове и дялове"}
+    description: {en: "Block devices with size, type, file system and mount point.", bg: "Блокови устройства с размер, тип, файлова система и точка на монтиране."}
+    tags: [disk, inventory]
+    command: |-
+      lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,MODEL
+    expected: {en: "Tree of disks, partitions, LVM and RAID devices.", bg: "Дърво с дискове, дялове, LVM и RAID устройства."}
+    errors: {en: "MODEL can be empty for virtual disks.", bg: "MODEL може да е празно при виртуални дискове."}

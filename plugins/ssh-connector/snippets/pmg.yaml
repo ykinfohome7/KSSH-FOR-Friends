@@ -1,0 +1,110 @@
+# Proxmox Mail Gateway — SMTP, Postfix, queue, spam filtering. READ_ONLY only.
+category: pmg
+defaults:
+  os: [proxmox-mail-gateway]
+  shell: posix
+  privilege: root
+  timeout: 45
+  tags: [pmg, mail]
+snippets:
+  - id: pmg.version
+    risk: READ_ONLY
+    name: {en: "PMG version", bg: "Версия на PMG"}
+    description: {en: "Proxmox Mail Gateway and package versions.", bg: "Версии на Proxmox Mail Gateway и пакетите."}
+    command: |-
+      pmgversion -v
+    expected: {en: "proxmox-mailgateway: X.Y and one line per package.", bg: "proxmox-mailgateway: X.Y и по един ред за пакет."}
+    errors: {en: "'command not found' = not a PMG host.", bg: "'command not found' = това не е PMG."}
+
+  - id: pmg.services
+    risk: READ_ONLY
+    name: {en: "Mail services", bg: "Пощенски услуги"}
+    description: {en: "State of Postfix, the PMG filter, ClamAV and the PMG daemons.", bg: "Състояние на Postfix, PMG филтъра, ClamAV и услугите на PMG."}
+    command: |-
+      systemctl is-active postfix pmg-smtp-filter pmgpolicy pmgdaemon pmgproxy clamav-daemon clamav-freshclam 2>&1 | paste -d' ' - - - - - - - ; systemctl --failed --no-legend --no-pager
+    expected: {en: "Seven times 'active' and no failed units.", bg: "Седем пъти 'active' и без неуспешни услуги."}
+    errors: {en: "pmg-smtp-filter inactive = mail is not filtered or delivered; clamav-daemon inactive = no virus scan.", bg: "pmg-smtp-filter неактивен = пощата не се филтрира и доставя; clamav-daemon неактивен = няма антивирусна проверка."}
+
+  - id: pmg.queue_summary
+    risk: READ_ONLY
+    name: {en: "Mail queue summary", bg: "Обобщение на опашката"}
+    description: {en: "Total size and number of queued messages.", bg: "Общ размер и брой писма в опашката."}
+    tags: [queue, smtp]
+    command: |-
+      postqueue -p | tail -n 1
+    expected: {en: "'-- N Kbytes in M Requests.' or 'Mail queue is empty'.", bg: "'-- N Kbytes in M Requests.' или 'Mail queue is empty'."}
+    errors: {en: "A growing queue means the next hop (e.g. Exchange) does not accept mail.", bg: "Растяща опашка означава, че следващият сървър (напр. Exchange) не приема поща."}
+
+  - id: pmg.queue_list
+    risk: READ_ONLY
+    name: {en: "Queued messages", bg: "Писма в опашката"}
+    description: {en: "First entries of the Postfix queue with the deferral reason.", bg: "Първите записи в опашката на Postfix с причината за забавяне."}
+    tags: [queue, smtp, troubleshooting]
+    params:
+      - name: lines
+        type: int
+        min: 10
+        max: 500
+        default: 60
+        description: {en: "Number of lines", bg: "Брой редове"}
+    command: |-
+      postqueue -p | head -n {{lines}}
+    expected: {en: "Queue ID, size, arrival time, sender, (reason) and recipients.", bg: "ID в опашката, размер, време, подател, (причина) и получатели."}
+    errors: {en: "Addresses are personal data — handle the output accordingly.", bg: "Адресите са лични данни — пази изхода."}
+
+  - id: pmg.postfix_config
+    risk: READ_ONLY
+    name: {en: "Postfix settings", bg: "Настройки на Postfix"}
+    description: {en: "Non-default Postfix parameters (relay host, networks, TLS).", bg: "Параметрите на Postfix, различни от стандартните (relay host, мрежи, TLS)."}
+    tags: [smtp, config]
+    command: |-
+      postconf -n
+    expected: {en: "name = value lines such as relayhost, mynetworks, smtpd_tls_security_level.", bg: "Редове име = стойност като relayhost, mynetworks, smtpd_tls_security_level."}
+    errors: {en: "Shows file paths to SASL maps, never their passwords.", bg: "Показва пътищата към SASL файловете, но не и паролите в тях."}
+
+  - id: pmg.smtp_log
+    risk: READ_ONLY
+    name: {en: "SMTP log", bg: "SMTP лог"}
+    description: {en: "Last lines from Postfix and the PMG SMTP filter.", bg: "Последните редове от Postfix и SMTP филтъра на PMG."}
+    tags: [logs, smtp]
+    params:
+      - name: lines
+        type: int
+        min: 10
+        max: 1000
+        default: 100
+        description: {en: "Number of lines", bg: "Брой редове"}
+    command: |-
+      journalctl -n {{lines}} --no-pager -t postfix/smtpd -t postfix/smtp -t postfix/qmgr -t pmg-smtp-filter
+    expected: {en: "connect from, NOQUEUE reject, status=sent/deferred/bounced and filter decisions.", bg: "connect from, NOQUEUE reject, status=sent/deferred/bounced и решенията на филтъра."}
+    errors: {en: "Contains e-mail addresses — personal data.", bg: "Съдържа имейл адреси — лични данни."}
+
+  - id: pmg.mail_stats
+    risk: READ_ONLY
+    name: {en: "Mail statistics today", bg: "Статистика за поща днес"}
+    description: {en: "Incoming/outgoing counts, spam and virus numbers from the PMG API.", bg: "Брой входящи/изходящи писма, спам и вируси от API на PMG."}
+    tags: [spam, statistics]
+    command: |-
+      pmgsh get /statistics/mail
+    expected: {en: "JSON with count_in, count_out, spamcount_in, viruscount_in, bounces ...", bg: "JSON с count_in, count_out, spamcount_in, viruscount_in, bounces ..."}
+    errors: {en: "Counts are for the current day by default.", bg: "Числата по подразбиране са за текущия ден."}
+
+  - id: pmg.cluster_status
+    risk: READ_ONLY
+    name: {en: "PMG cluster", bg: "PMG клъстер"}
+    description: {en: "Cluster nodes and synchronisation state.", bg: "Хостове в клъстера и състояние на синхронизацията."}
+    tags: [cluster]
+    command: |-
+      pmgcm status
+    expected: {en: "Each node with role (master/node) and state A (active).", bg: "Всеки хост с роля (master/node) и състояние A (активен)."}
+    errors: {en: "'no cluster defined' on a single gateway.", bg: "'no cluster defined' при един gateway."}
+
+  - id: pmg.clamav_db
+    risk: READ_ONLY
+    name: {en: "ClamAV signatures", bg: "Сигнатури на ClamAV"}
+    description: {en: "Version and build time of the installed virus databases.", bg: "Версия и дата на антивирусните бази."}
+    tags: [spam, security]
+    command: |-
+      for f in /var/lib/clamav/daily.c?d /var/lib/clamav/main.c?d; do [ -e "$f" ] && sigtool --info "$f" | grep -E '^(File|Build time|Version)'; done
+    expected: {en: "Build time of daily.cvd/cld within the last day or two.", bg: "Build time на daily.cvd/cld от последните ден-два."}
+    errors: {en: "An old daily database = freshclam cannot download updates.", bg: "Стара daily база = freshclam не може да изтегли обновления."}

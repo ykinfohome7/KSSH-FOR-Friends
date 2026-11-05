@@ -1,0 +1,207 @@
+# Networking from a Linux host — VLAN, ARP, routing, ping, TCP, 10GbE, MTU. READ_ONLY only.
+category: network
+defaults:
+  os: [debian, ubuntu, rhel, rocky, proxmox-ve, proxmox-mail-gateway]
+  shell: posix
+  privilege: user
+  timeout: 30
+  tags: [network]
+snippets:
+  - id: network.interfaces
+    risk: READ_ONLY
+    name: {en: "Interfaces and addresses", bg: "Интерфейси и адреси"}
+    description: {en: "Short list of links and IP addresses.", bg: "Кратък списък с интерфейси и IP адреси."}
+    smoke: true
+    command: |-
+      ip -br link; ip -br addr
+    expected: {en: "name, state (UP/DOWN), MAC; then name, state and addresses.", bg: "име, състояние (UP/DOWN), MAC; после име, състояние и адреси."}
+    errors: {en: "NO-CARRIER = no link on that port.", bg: "NO-CARRIER = няма връзка на този порт."}
+
+  - id: network.link_details
+    risk: READ_ONLY
+    name: {en: "Link speed and duplex (10GbE)", bg: "Скорост и duplex (10GbE)"}
+    description: {en: "Negotiated speed, duplex, auto-negotiation and link of one NIC.", bg: "Договорена скорост, duplex, автоматично договаряне и връзка на една мрежова карта."}
+    tags: [10gbe, nic]
+    params:
+      - name: iface
+        type: iface
+        example: eno1
+        description: {en: "Interface name", bg: "Име на интерфейса"}
+    command: |-
+      ethtool {{iface}}
+    expected: {en: "Speed: 10000Mb/s, Duplex: Full, Link detected: yes for a healthy 10GbE port.", bg: "Speed: 10000Mb/s, Duplex: Full, Link detected: yes за изправен 10GbE порт."}
+    errors: {en: "Speed: 1000Mb/s on a 10G port = wrong cable/SFP or negotiation. Bridges and VLANs show Unknown.", bg: "Speed: 1000Mb/s на 10G порт = грешен кабел/SFP или договаряне. Мостове и VLAN показват Unknown."}
+
+  - id: network.nic_errors
+    risk: READ_ONLY
+    name: {en: "NIC counters and errors", bg: "Броячи и грешки на мрежовата карта"}
+    description: {en: "RX/TX bytes, packets, errors and drops of one interface.", bg: "RX/TX байтове, пакети, грешки и изпуснати пакети за един интерфейс."}
+    tags: [nic, troubleshooting]
+    params:
+      - name: iface
+        type: iface
+        example: eno1
+        description: {en: "Interface name", bg: "Име на интерфейса"}
+    command: |-
+      ip -s -s link show dev {{iface}}
+    expected: {en: "RX/TX blocks with errors, dropped, overrun, crc and carrier counters.", bg: "Блокове RX/TX с броячи errors, dropped, overrun, crc и carrier."}
+    errors: {en: "Rising crc/errors = cable, SFP or port problem; rising dropped = load or buffer limits.", bg: "Растящи crc/errors = кабел, SFP или порт; растящи dropped = натоварване или буфери."}
+
+  - id: network.routes
+    risk: READ_ONLY
+    name: {en: "Routing table", bg: "Маршрути"}
+    description: {en: "IPv4 and IPv6 routes.", bg: "IPv4 и IPv6 маршрути."}
+    smoke: true
+    tags: [routing]
+    command: |-
+      ip route show; ip -6 route show
+    expected: {en: "'default via <gateway> dev <iface>' plus connected and static routes.", bg: "'default via <gateway> dev <интерфейс>' и директни и статични маршрути."}
+    errors: {en: "No default route = no internet from this host.", bg: "Без default маршрут този хост няма интернет."}
+
+  - id: network.route_to
+    risk: READ_ONLY
+    name: {en: "Route to an address", bg: "Маршрут до адрес"}
+    description: {en: "Which interface, gateway and source address the kernel uses for one destination.", bg: "Кой интерфейс, gateway и адрес-източник използва ядрото за дадена цел."}
+    tags: [routing, troubleshooting]
+    params:
+      - name: ip
+        type: ip
+        example: 192.0.2.1
+        description: {en: "Destination IP", bg: "IP адрес на целта"}
+    command: |-
+      ip route get {{ip}}
+    expected: {en: "'<ip> via <gw> dev <iface> src <source>'.", bg: "'<ip> via <gw> dev <интерфейс> src <източник>'."}
+    errors: {en: "'Network is unreachable' = no matching route.", bg: "'Network is unreachable' = няма подходящ маршрут."}
+
+  - id: network.arp_table
+    risk: READ_ONLY
+    name: {en: "ARP / neighbour table", bg: "ARP таблица"}
+    description: {en: "Known neighbours with MAC address and state.", bg: "Известни съседи с MAC адрес и състояние."}
+    tags: [arp]
+    command: |-
+      ip neigh show
+    expected: {en: "IP dev <iface> lladdr <MAC> REACHABLE/STALE.", bg: "IP dev <интерфейс> lladdr <MAC> REACHABLE/STALE."}
+    errors: {en: "FAILED/INCOMPLETE = the host does not answer ARP (down or wrong VLAN).", bg: "FAILED/INCOMPLETE = хостът не отговаря на ARP (изключен или грешен VLAN)."}
+
+  - id: network.vlans
+    risk: READ_ONLY
+    name: {en: "VLAN interfaces", bg: "VLAN интерфейси"}
+    description: {en: "802.1Q VLAN interfaces with their ID and parent.", bg: "802.1Q VLAN интерфейси с номер и родителски интерфейс."}
+    tags: [vlan]
+    command: |-
+      ip -d -br link show type vlan; ip -d link show type vlan | grep -E 'vlan protocol|^[0-9]+:' || true
+    expected: {en: "Lines like 'vlan30@eno1' and 'vlan protocol 802.1Q id 30'.", bg: "Редове като 'vlan30@eno1' и 'vlan protocol 802.1Q id 30'."}
+    errors: {en: "Empty = no VLAN sub-interfaces (VLAN-aware bridges are shown by network.bridge_vlans).", bg: "Празно = няма VLAN подинтерфейси (VLAN-aware мостовете са в network.bridge_vlans)."}
+
+  - id: network.bridge_vlans
+    risk: READ_ONLY
+    name: {en: "Bridge VLANs", bg: "VLAN на мостовете"}
+    description: {en: "VLANs allowed on each port of VLAN-aware Linux bridges (e.g. Proxmox vmbr0).", bg: "Разрешените VLAN на всеки порт на VLAN-aware мостове (напр. vmbr0 в Proxmox)."}
+    tags: [vlan, proxmox]
+    command: |-
+      bridge vlan show
+    expected: {en: "port, vlan-id, PVID and Egress Untagged flags.", bg: "порт, vlan-id и флагове PVID / Egress Untagged."}
+    errors: {en: "Only 1 PVID per port = bridge is not VLAN-aware.", bg: "Само 1 PVID на порт = мостът не е VLAN-aware."}
+
+  - id: network.ping
+    risk: READ_ONLY
+    name: {en: "Ping", bg: "Проверка с ping"}
+    description: {en: "ICMP echo with loss and round-trip time.", bg: "ICMP echo със загуби и време за отговор."}
+    tags: [troubleshooting]
+    params:
+      - name: host
+        type: host
+        example: 192.0.2.1
+        description: {en: "Host name or IP", bg: "Име или IP адрес"}
+      - name: count
+        type: int
+        min: 1
+        max: 20
+        default: 4
+        description: {en: "Number of packets", bg: "Брой пакети"}
+    command: |-
+      ping -c {{count}} -W 2 {{host}}
+    expected: {en: "'N packets transmitted, N received, 0% packet loss' and rtt min/avg/max.", bg: "'N packets transmitted, N received, 0% packet loss' и rtt min/avg/max (ping тест)."}
+    errors: {en: "100% loss may also be a firewall that blocks ICMP; check with network.tcp_port.", bg: "100% загуби може да е и firewall, който спира ICMP; провери с network.tcp_port."}
+
+  - id: network.mtu_test
+    risk: READ_ONLY
+    name: {en: "MTU / jumbo frame test", bg: "Тест за MTU / jumbo frames"}
+    description: {en: "Ping with the Don't Fragment bit and a given payload size (8972 = MTU 9000).", bg: "Ping с флаг Don't Fragment и зададен размер (8972 = MTU 9000)."}
+    tags: [mtu, 10gbe, troubleshooting]
+    params:
+      - name: host
+        type: host
+        example: 192.0.2.1
+        description: {en: "Host name or IP", bg: "Име или IP адрес"}
+      - name: size
+        type: int
+        min: 548
+        max: 8972
+        default: 1472
+        description: {en: "ICMP payload in bytes (MTU minus 28)", bg: "Размер на данните в байтове (MTU минус 28)"}
+    command: |-
+      ping -c 3 -W 2 -M do -s {{size}} {{host}}
+    expected: {en: "Replies = the whole path supports that MTU.", bg: "Има отговори = целият път поддържа този MTU."}
+    errors: {en: "'message too long' or 'Frag needed' = a hop has a smaller MTU.", bg: "'message too long' или 'Frag needed' = някъде по пътя MTU е по-малък."}
+
+  - id: network.tcp_port
+    risk: READ_ONLY
+    name: {en: "TCP port check", bg: "Проверка на TCP порт"}
+    description: {en: "Is a TCP port reachable (connect only, no data sent).", bg: "Достъпен ли е TCP порт (само свързване, без изпращане на данни)."}
+    tags: [troubleshooting, tcp]
+    params:
+      - name: host
+        type: host
+        example: 192.0.2.10
+        description: {en: "Host name or IP", bg: "Име или IP адрес"}
+      - name: port
+        type: port
+        example: 443
+        description: {en: "TCP port", bg: "TCP порт"}
+    command: |-
+      nc -z -v -w 3 {{host}} {{port}} 2>&1
+    expected: {en: "'succeeded' / 'open' = reachable.", bg: "'succeeded' / 'open' = портът е достъпен."}
+    errors: {en: "'Connection refused' = host up, port closed; timeout = filtered or host down. Needs netcat installed.", bg: "'Connection refused' = хостът работи, портът е затворен; timeout = филтриран или хостът е изключен. Нужен е netcat."}
+
+  - id: network.trace
+    risk: READ_ONLY
+    name: {en: "Path trace", bg: "Проследяване на пътя"}
+    description: {en: "Hops and path MTU towards a host (tracepath, no root needed).", bg: "Междинни възли и MTU по пътя до хост (tracepath, без root)."}
+    tags: [routing, mtu, troubleshooting]
+    timeout: 60
+    params:
+      - name: host
+        type: host
+        example: 192.0.2.1
+        description: {en: "Host name or IP", bg: "Име или IP адрес"}
+    command: |-
+      tracepath -n -m 20 {{host}}
+    expected: {en: "Numbered hops with latency and 'pmtu' values, ending with 'reached'.", bg: "Номерирани възли със закъснение и стойности 'pmtu', накрая 'reached'."}
+    errors: {en: "'no reply' hops are normal for routers that drop probes.", bg: "Възли с 'no reply' са нормални за рутери, които не отговарят."}
+
+  - id: network.dns_lookup
+    risk: READ_ONLY
+    name: {en: "Name resolution", bg: "Превод на име"}
+    description: {en: "Resolve a name with the system resolver (same path as applications).", bg: "Превежда име през системния resolver (както приложенията)."}
+    tags: [dns]
+    params:
+      - name: name
+        type: host
+        example: example.com
+        description: {en: "Host name", bg: "Име на хост"}
+    command: |-
+      getent ahosts {{name}}
+    expected: {en: "Address lines with STREAM/DGRAM/RAW.", bg: "Редове с адреси и STREAM/DGRAM/RAW."}
+    errors: {en: "Exit 2 and no output = the name cannot be resolved.", bg: "Код 2 без изход = името не може да се преведе."}
+
+  - id: network.socket_summary
+    risk: READ_ONLY
+    name: {en: "Socket summary", bg: "Обобщение на връзките"}
+    description: {en: "Counts of TCP states and sockets.", bg: "Брой TCP връзки по състояния."}
+    smoke: true
+    tags: [tcp]
+    command: |-
+      ss -s
+    expected: {en: "Total, TCP estab/closed/orphaned/timewait, UDP, RAW counts.", bg: "Общо, TCP estab/closed/orphaned/timewait и брой UDP, RAW."}
+    errors: {en: "Very high timewait or orphaned counts point to connection storms.", bg: "Много високи timewait или orphaned сочат прекалено много връзки."}

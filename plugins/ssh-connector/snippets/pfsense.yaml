@@ -1,0 +1,173 @@
+# pfSense (FreeBSD) — interfaces, routing, DNS, VPN, firewall diagnostics. READ_ONLY only.
+# Needs an SSH account with a shell (admin or a user with the "User - System: Shell account access"
+# privilege). Commands are wrapped in /bin/sh -c, so the login shell (tcsh or the console menu
+# with option 8) does not change quoting.
+category: pfsense
+defaults:
+  os: [pfsense]
+  shell: freebsd-sh
+  privilege: admin
+  timeout: 30
+  tags: [pfsense, firewall]
+snippets:
+  - id: pfsense.version
+    risk: READ_ONLY
+    name: {en: "pfSense version", bg: "Версия на pfSense"}
+    description: {en: "pfSense release, FreeBSD kernel and uptime.", bg: "Версия на pfSense, ядро на FreeBSD и време на работа."}
+    command: |-
+      cat /etc/version; uname -a; uptime
+    expected: {en: "e.g. 2.7.2-RELEASE, the FreeBSD kernel line and the load average.", bg: "напр. 2.7.2-RELEASE, ред с ядрото на FreeBSD и средно натоварване."}
+    errors: {en: "Missing /etc/version means this is not pfSense.", bg: "Липсващ /etc/version означава, че това не е pfSense."}
+
+  - id: pfsense.interfaces
+    risk: READ_ONLY
+    name: {en: "Interfaces", bg: "Интерфейси"}
+    description: {en: "All interfaces with addresses, VLAN tags, media and link state.", bg: "Всички интерфейси с адреси, VLAN, media и състояние на връзката."}
+    tags: [network, vlan]
+    command: |-
+      ifconfig -a
+    expected: {en: "Per interface: flags, ether, inet/inet6, vlan: <tag> parent, media and status: active.", bg: "За всеки интерфейс: flags, ether, inet/inet6, vlan: <tag> parent, media и status: active."}
+    errors: {en: "status: no carrier = cable or switch port down.", bg: "status: no carrier = няма връзка (кабел или порт на switch)."}
+
+  - id: pfsense.interface_counters
+    risk: READ_ONLY
+    name: {en: "Interface counters", bg: "Броячи на интерфейсите"}
+    description: {en: "Packets, errors and bytes per interface.", bg: "Пакети, грешки и байтове по интерфейси."}
+    tags: [network]
+    command: |-
+      netstat -i -b -n -W
+    expected: {en: "Name, Mtu, Address, Ipkts, Ierrs, Idrop, Ibytes, Opkts, Oerrs, Obytes.", bg: "Колони Name, Mtu, Address, Ipkts, Ierrs, Idrop, Ibytes, Opkts, Oerrs, Obytes."}
+    errors: {en: "Growing Ierrs/Oerrs point to cabling, duplex or driver problems.", bg: "Растящи Ierrs/Oerrs сочат проблем с кабел, duplex или драйвер."}
+
+  - id: pfsense.routes
+    risk: READ_ONLY
+    name: {en: "Routing table", bg: "Таблица с маршрути"}
+    description: {en: "IPv4 and IPv6 routes with gateways and interfaces.", bg: "IPv4 и IPv6 маршрути с gateway и интерфейси."}
+    tags: [network, routing]
+    command: |-
+      netstat -rn
+    expected: {en: "Destination, Gateway, Flags, Netif for inet and inet6; 'default' is the default gateway.", bg: "Destination, Gateway, Flags, Netif за inet и inet6; 'default' е gateway по подразбиране."}
+    errors: {en: "No 'default' line means there is no default route (no internet).", bg: "Без ред 'default' няма маршрут по подразбиране (няма интернет)."}
+
+  - id: pfsense.gateway_status
+    risk: READ_ONLY
+    name: {en: "Gateway status", bg: "Състояние на gateway"}
+    description: {en: "Monitoring result of every gateway: latency, loss and state.", bg: "Резултат от наблюдението на всеки gateway: закъснение, загуби и състояние."}
+    tags: [routing, wan]
+    command: |-
+      pfSsh.php playback gatewaystatus
+    expected: {en: "Name, Monitor IP, Source, Delay, StdDev, Loss, Status (online/down/loss/delay).", bg: "Колони Name, Monitor IP, Source, Delay, StdDev, Loss и състояние (online/down/loss/delay)."}
+    errors: {en: "Needs root/admin. 'down' with 100% loss = gateway or monitor IP unreachable.", bg: "Изисква root/admin. 'down' със 100% загуби = gateway или monitor IP е недостъпен."}
+
+  - id: pfsense.pf_info
+    risk: READ_ONLY
+    name: {en: "Packet filter status", bg: "Състояние на packet filter"}
+    description: {en: "pf on/off, state table size and counters.", bg: "Дали pf е включен, размер на таблицата със състояния и броячи."}
+    command: |-
+      pfctl -si
+    expected: {en: "'Status: Enabled', State Table current entries, searches, inserts, removals.", bg: "'Status: Enabled', брой записи в State Table и броячи searches, inserts, removals."}
+    errors: {en: "'Status: Disabled' means the firewall is not filtering.", bg: "'Status: Disabled' означава, че firewall не филтрира."}
+
+  - id: pfsense.pf_rules
+    risk: READ_ONLY
+    name: {en: "Loaded firewall rules", bg: "Заредени правила на firewall"}
+    description: {en: "The rule set that pf is enforcing right now.", bg: "Правилата, които pf прилага в момента."}
+    timeout: 45
+    command: |-
+      pfctl -sr
+    expected: {en: "pass/block lines with interface, protocol, source, destination and labels.", bg: "Редове pass/block с интерфейс, протокол, източник, цел и етикети."}
+    errors: {en: "Large rule sets can be long; the output is capped by the connector.", bg: "Големите набори правила са дълги; изходът се ограничава от конектора."}
+
+  - id: pfsense.pf_states
+    risk: READ_ONLY
+    name: {en: "States for a host", bg: "Връзки на един хост"}
+    description: {en: "Current pf states that contain a given IP address.", bg: "Текущите pf връзки, в които участва даден IP адрес."}
+    tags: [troubleshooting]
+    params:
+      - name: ip
+        type: ip
+        example: 192.0.2.10
+        description: {en: "IP address to look for", bg: "IP адрес за търсене"}
+    command: |-
+      pfctl -ss | grep -F -- {{ip}} | head -n 200
+    expected: {en: "Lines like 'all tcp 192.0.2.10:443 <- 198.51.100.7:51234 ESTABLISHED:ESTABLISHED'.", bg: "Редове като 'all tcp 192.0.2.10:443 <- 198.51.100.7:51234 ESTABLISHED:ESTABLISHED'."}
+    errors: {en: "Empty output = no active connections for that address.", bg: "Празен изход = няма активни връзки за този адрес."}
+
+  - id: pfsense.dns_lookup
+    risk: READ_ONLY
+    name: {en: "DNS lookup from the firewall", bg: "DNS заявка от firewall"}
+    description: {en: "Resolve a name with the firewall's own resolver.", bg: "Превежда име през DNS resolver-а на самия firewall."}
+    tags: [dns]
+    params:
+      - name: name
+        type: host
+        example: example.com
+        description: {en: "Host name to resolve", bg: "Име за превод"}
+    command: |-
+      host {{name}}
+    expected: {en: "'<name> has address ...' lines (A, AAAA, MX).", bg: "Редове '<име> has address ...' (A, AAAA, MX)."}
+    errors: {en: "NXDOMAIN = name does not exist; 'connection timed out' = resolver not answering.", bg: "NXDOMAIN = няма такова име; 'connection timed out' = resolver-ът не отговаря."}
+
+  - id: pfsense.dns_resolver
+    risk: READ_ONLY
+    name: {en: "DNS resolver / forwarder", bg: "DNS услуга (resolver / forwarder)"}
+    description: {en: "Is Unbound or dnsmasq running and on which sockets.", bg: "Работи ли Unbound или dnsmasq и на кои портове слуша."}
+    tags: [dns]
+    command: |-
+      ps ax | grep -E '[u]nbound|[d]nsmasq'; sockstat -4 -6 -l | grep -E 'unbound|dnsmasq'
+    expected: {en: "The process line and sockets on port 53.", bg: "Ред с процеса и сокети на порт 53."}
+    errors: {en: "No output = neither resolver nor forwarder is running.", bg: "Без изход = не работи нито resolver, нито forwarder."}
+
+  - id: pfsense.ipsec_status
+    risk: READ_ONLY
+    name: {en: "IPsec tunnels", bg: "IPsec тунели"}
+    description: {en: "Established IPsec SAs (strongSwan).", bg: "Установени IPsec SA (strongSwan)."}
+    tags: [vpn, ipsec]
+    command: |-
+      swanctl --list-sas 2>/dev/null || echo "IPsec is not running"
+    expected: {en: "Per tunnel: ESTABLISHED, peer addresses and INSTALLED child SAs with bytes.", bg: "За всеки тунел: ESTABLISHED, адреси и INSTALLED child SA с байтове."}
+    errors: {en: "Missing child SAs while the IKE SA is up = phase 2 mismatch.", bg: "Липсващи child SA при работещ IKE SA = несъответствие във фаза 2."}
+
+  - id: pfsense.openvpn_status
+    risk: READ_ONLY
+    name: {en: "OpenVPN instances", bg: "OpenVPN инстанции"}
+    description: {en: "Running OpenVPN processes and their listening sockets.", bg: "Работещи OpenVPN процеси и портовете им."}
+    tags: [vpn, openvpn]
+    command: |-
+      ps ax | grep '[o]penvpn'; sockstat -4 -6 -l | grep openvpn
+    expected: {en: "One process per server/client instance and the UDP/TCP port it uses.", bg: "По един процес за всеки сървър/клиент и UDP/TCP порта му."}
+    errors: {en: "No process = the instance is stopped or failed (see the OpenVPN log in the GUI).", bg: "Без процес = инстанцията е спряна или е паднала (виж OpenVPN лога в GUI)."}
+
+  - id: pfsense.system_log
+    risk: READ_ONLY
+    name: {en: "System log", bg: "Системен лог"}
+    description: {en: "Last lines of the system log.", bg: "Последните редове от системния лог."}
+    tags: [logs]
+    params:
+      - name: lines
+        type: int
+        min: 10
+        max: 500
+        default: 50
+        description: {en: "Number of lines", bg: "Брой редове"}
+    command: |-
+      tail -n {{lines}} /var/log/system.log
+    expected: {en: "Time-stamped syslog lines from the kernel and pfSense services.", bg: "Syslog редове с време от ядрото и услугите на pfSense."}
+    errors: {en: "pfSense before 2.5 used binary clog files; this snippet needs 2.5 or newer.", bg: "pfSense преди 2.5 ползва двоични clog файлове; нужен е 2.5 или по-нов."}
+
+  - id: pfsense.filter_log
+    risk: READ_ONLY
+    name: {en: "Firewall log", bg: "Лог на firewall"}
+    description: {en: "Last raw lines of the pf filter log (blocked/passed packets with logging).", bg: "Последните редове от лога на pf (блокирани/пропуснати пакети с логване)."}
+    tags: [logs, troubleshooting]
+    params:
+      - name: lines
+        type: int
+        min: 10
+        max: 500
+        default: 50
+        description: {en: "Number of lines", bg: "Брой редове"}
+    command: |-
+      tail -n {{lines}} /var/log/filter.log
+    expected: {en: "CSV-like filterlog lines: rule number, interface, action, direction, protocol, addresses.", bg: "Редове filterlog: номер на правило, интерфейс, действие, посока, протокол, адреси."}
+    errors: {en: "Only rules with logging enabled write here.", bg: "Тук пишат само правила с включено логване."}
